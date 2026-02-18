@@ -10,8 +10,9 @@ pip install .
 nanoslides --help
 nanoslides setup
 nanoslides init MyProject
-nanoslides style create
-nanoslides style create studio-look --global --base-prompt "High-end studio product look"
+nanoslides styles create
+nanoslides styles create studio-look --global --base-prompt "High-end studio product look"
+nanoslides styles
 nanoslides generate "A minimalist title slide about AI safety" --model flash
 nanoslides export --format pptx
 ```
@@ -30,8 +31,10 @@ and foundational CLI commands, including NanoBanana-backed slide generation.
 
 ## Guided CLI workflow
 
-- `nanoslides generate` now walks you through prompt/model/style/reference image
-  setup in an interactive flow by default.
-- `nanoslides style create` also guides style creation step by step.
+- `nanoslides generate` runs directly when a prompt is provided, and only opens
+  the guided prompt/model/style/reference flow when the prompt is omitted.
+- `nanoslides styles create` also guides style creation step by step.
+- `nanoslides generate` defaults to a `16:9` output aspect ratio; override with
+  `--aspect-ratio` for other formats.
 - Long image generation calls display a spinner/status indicator.
 - Default logging is quiet; use `-v` for verbose provider/network logs.

@@ -23,7 +23,11 @@ from nanoslides.core.style import (
     load_project_style,
     resolve_style_context,
 )
-from nanoslides.engines.nanobanana import NanoBananaModel, NanoBananaSlideEngine
+from nanoslides.engines.nanobanana import (
+    ImageAspectRatio,
+    NanoBananaModel,
+    NanoBananaSlideEngine,
+)
 
 console = Console()
 
@@ -58,6 +62,12 @@ def generate_command(
         "--output-dir",
         help="Directory where generated images are saved.",
     ),
+    aspect_ratio: ImageAspectRatio = typer.Option(
+        ImageAspectRatio.RATIO_16_9,
+        "--aspect-ratio",
+        case_sensitive=False,
+        help="Output image aspect ratio.",
+    ),
     no_interactive: bool = typer.Option(
         False,
         "--no-interactive",
@@ -69,7 +79,7 @@ def generate_command(
     selected_model = model
     selected_style_id = style_id
     selected_ref_image = ref_image
-    if not no_interactive and sys.stdin.isatty():
+    if not no_interactive and sys.stdin.isatty() and not selected_prompt:
         (
             selected_prompt,
             selected_model,
@@ -103,6 +113,7 @@ def generate_command(
                 prompt=selected_prompt,
                 style=resolved_style,
                 ref_image=selected_ref_image.read_bytes() if selected_ref_image else None,
+                aspect_ratio=aspect_ratio,
             )
     except ValueError as exc:
         console.print(f"[bold red]{exc}[/]")
@@ -118,6 +129,7 @@ def generate_command(
             f"[bold green]Slide generated[/]\n"
             f"Model: [bold]{effective_model.value}[/]\n"
             f"Style: [bold]{style_label}[/]\n"
+            f"Aspect ratio: [bold]{aspect_ratio.value}[/]\n"
             f"Saved to [bold]{result.local_path}[/]",
             title="nanoslides",
             border_style="green",
