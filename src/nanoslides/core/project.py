@@ -119,6 +119,7 @@ def load_project_state(path: Path = PROJECT_STATE_FILE) -> ProjectState:
 def save_project_state(state: ProjectState, path: Path = PROJECT_STATE_FILE) -> None:
     """Write local project state to YAML."""
     serialized = state.model_dump(mode="json")
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(serialized, sort_keys=False), encoding="utf-8")
 
 

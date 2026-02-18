@@ -16,27 +16,38 @@ console = Console()
 
 def init_command(
     ctx: typer.Context,
-    name: str | None = typer.Argument(None, help="Optional project name."),
-    force: bool = typer.Option(False, "--force", help="Overwrite existing slides.yaml."),
+    name: str | None = typer.Argument(
+        None,
+        help="Optional project name/folder (creates ./<name>/slides.yaml when provided).",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Overwrite an existing project state file.",
+    ),
 ) -> None:
     """Initialize a new slides project in the current directory."""
-    if PROJECT_STATE_FILE.exists() and not force:
-        console.print("[bold red]slides.yaml already exists. Use --force to overwrite.[/]")
+    project_name = name or Path.cwd().name
+    project_state_path = (Path(name) / PROJECT_STATE_FILE) if name else PROJECT_STATE_FILE
+
+    if project_state_path.exists() and not force:
+        console.print(
+            f"[bold red]{project_state_path} already exists. Use --force to overwrite.[/]"
+        )
         raise typer.Exit(code=1)
 
     config = _resolve_config(ctx)
-    project_name = name or Path.cwd().name
     state = ProjectState(
         name=project_name,
         created_at=datetime.now(timezone.utc),
         engine=config.default_engine,
         slides=[],
     )
-    save_project_state(state, PROJECT_STATE_FILE)
+    save_project_state(state, project_state_path)
 
     console.print(
         f"[bold green]Initialized slides project '{project_name}' at "
-        f"{PROJECT_STATE_FILE.resolve()}[/]"
+        f"{project_state_path.resolve()}[/]"
     )
 
 

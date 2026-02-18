@@ -27,7 +27,7 @@ def edit_command(
     ctx: typer.Context,
     target: str = typer.Argument(
         ...,
-        help="Slide ID from slides.yaml or source image path to edit.",
+        help=f"Slide ID from {PROJECT_STATE_FILE} or source image path to edit.",
     ),
     instruction: str = typer.Argument(..., help="Edit instruction."),
     model: NanoBananaModel | None = typer.Option(
@@ -125,11 +125,11 @@ def _resolve_edit_target(target: str) -> tuple[Path, ProjectState | None, SlideE
     matched_slide = _find_slide_by_id(project_state, target)
     if matched_slide is None:
         raise ValueError(
-            f"Slide target '{target}' was not found. Use a slide ID from slides.yaml "
+            f"Slide target '{target}' was not found. Use a slide ID from {PROJECT_STATE_FILE} "
             "or an existing image path."
         )
     if not matched_slide.image_path:
-        raise ValueError(f"Slide '{target}' has no image path in slides.yaml.")
+        raise ValueError(f"Slide '{target}' has no image path in {PROJECT_STATE_FILE}.")
 
     resolved_target = _resolve_slide_image_path(matched_slide.image_path)
     if not resolved_target.exists() or not resolved_target.is_file():
