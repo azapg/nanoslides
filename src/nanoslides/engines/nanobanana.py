@@ -13,6 +13,7 @@ from google import genai
 from google.genai import types
 
 from nanoslides.core.interfaces import SlideEngine, SlideResult
+from nanoslides.core.style import ResolvedStyle
 
 _MODEL_MAP = {
     "flash": "gemini-2.5-flash-image",
@@ -48,10 +49,16 @@ class NanoBananaSlideEngine(SlideEngine):
         self._client = genai.Client(api_key=_resolve_api_key(api_key))
 
     def generate(
-        self, prompt: str, style_id: str, ref_image: bytes | None = None
+        self,
+        prompt: str,
+        style_id: str = "default",
+        style: ResolvedStyle | None = None,
+        ref_image: bytes | None = None,
     ) -> SlideResult:
-        revised_prompt = _build_prompt(prompt, style_id)
+        resolved_style = style or _style_from_style_id(style_id)
+        revised_prompt = _build_prompt(prompt, resolved_style)
         contents: list[Any] = [revised_prompt]
+        contents.extend(_style_reference_parts(resolved_style))
         if ref_image is not None:
             contents.append(_bytes_part(ref_image))
 
@@ -66,14 +73,20 @@ class NanoBananaSlideEngine(SlideEngine):
         self,
         image: bytes,
         instruction: str,
+        style_id: str = "default",
+        style: ResolvedStyle | None = None,
         mask: dict[str, Any] | None = None,
     ) -> SlideResult:
+        resolved_style = style or _style_from_style_id(style_id)
+        revised_prompt = _build_prompt(instruction, resolved_style)
+        contents: list[Any] = [revised_prompt, _bytes_part(image)]
+        contents.extend(_style_reference_parts(resolved_style))
         response = self._client.models.generate_content(
             model=self._api_model,
-            contents=[instruction, _bytes_part(image)],
+            contents=contents,
             config=types.GenerateContentConfig(response_modalities=["TEXT", "IMAGE"]),
         )
-        result = self._to_slide_result(response, revised_prompt=instruction)
+        result = self._to_slide_result(response, revised_prompt=revised_prompt)
         if mask is not None:
             result.metadata["mask"] = mask
         return result
@@ -134,10 +147,43 @@ def _resolve_api_key(api_key: str | None) -> str:
     )
 
 
-def _build_prompt(prompt: str, style_id: str) -> str:
-    if style_id == "default":
+def _build_prompt(prompt: str, style: ResolvedStyle | None = None) -> str:
+    if style is None:
         return prompt
-    return f"{prompt}\n\nUse this style preset: {style_id}"
+
+    sections: list[str] = []
+    if style.base_prompt:
+        sections.append(style.base_prompt)
+    sections.append(prompt)
+    if style.reference_comments:
+        comments = "\n".join(f"- {comment}" for comment in style.reference_comments)
+        sections.append(f"Style references:\n{comments}")
+    if style.negative_prompt:
+        sections.append(f"Avoid:\n{style.negative_prompt}")
+    if style.style_id:
+        sections.append(f"Apply global style preset: {style.style_id}")
+
+    return "\n\n".join(section for section in sections if section)
+
+
+def _style_reference_parts(style: ResolvedStyle | None) -> list[types.Part]:
+    if style is None:
+        return []
+
+    parts: list[types.Part] = []
+    for raw_path in style.reference_images:
+        path = Path(raw_path).expanduser()
+        if not path.exists():
+            raise ValueError(f"Style reference image not found: {path}")
+        parts.append(_bytes_part(path.read_bytes()))
+    return parts
+
+
+def _style_from_style_id(style_id: str) -> ResolvedStyle | None:
+    normalized = style_id.strip()
+    if not normalized or normalized == "default":
+        return None
+    return ResolvedStyle(style_id=normalized)
 
 
 def _bytes_part(image_bytes: bytes) -> types.Part:

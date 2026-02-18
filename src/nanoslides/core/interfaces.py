@@ -8,6 +8,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from nanoslides.core.style import ResolvedStyle
+
 
 class SlideResult(BaseModel):
     """Result payload returned by slide generation/edit operations."""
@@ -23,7 +25,11 @@ class SlideEngine(ABC):
 
     @abstractmethod
     def generate(
-        self, prompt: str, style_id: str, ref_image: bytes | None = None
+        self,
+        prompt: str,
+        style_id: str = "default",
+        style: ResolvedStyle | None = None,
+        ref_image: bytes | None = None,
     ) -> SlideResult:
         """Generate a slide from scratch."""
 
@@ -32,6 +38,8 @@ class SlideEngine(ABC):
         self,
         image: bytes,
         instruction: str,
+        style_id: str = "default",
+        style: ResolvedStyle | None = None,
         mask: dict[str, Any] | None = None,
     ) -> SlideResult:
         """Edit an existing slide."""
