@@ -13,6 +13,8 @@ from nanoslides.cli.commands.edit import edit_command
 from nanoslides.cli.commands.export import export_command
 from nanoslides.cli.commands.generate import generate_command
 from nanoslides.cli.commands.init import init_command
+from nanoslides.cli.commands.move import move_command
+from nanoslides.cli.commands.remove import remove_command
 from nanoslides.cli.commands.setup import setup_command
 from nanoslides.cli.commands.style import style_app
 from nanoslides.core.config import load_global_config
@@ -63,6 +65,8 @@ app.command("init")(init_command)
 app.command("setup")(setup_command)
 app.command("generate", context_settings={"allow_extra_args": True})(generate_command)
 app.command("edit")(edit_command)
+app.command("remove")(remove_command)
+app.command("move")(move_command)
 app.command("export")(export_command)
 app.add_typer(style_app, name="styles")
 
