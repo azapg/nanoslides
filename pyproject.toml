@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 dependencies = [
   "google-genai>=1.30.0",
   "pydantic>=2.6",
+  "python-pptx>=1.0.2",
   "python-dotenv>=1.0",
   "pyyaml>=6.0",
   "rich>=13.0",

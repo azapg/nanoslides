@@ -13,6 +13,7 @@ nanoslides init MyProject
 nanoslides style create --base-prompt "Soft lighting, cinematic composition"
 nanoslides style create studio-look --global --base-prompt "High-end studio product look"
 nanoslides generate "A minimalist title slide about AI safety" --model flash
+nanoslides export --format pptx
 ```
 
 This repository currently includes the architecture skeleton, configuration loading,

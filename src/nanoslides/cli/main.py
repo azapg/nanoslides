@@ -6,6 +6,7 @@ import typer
 from dotenv import load_dotenv
 
 from nanoslides.cli.commands.edit import edit_command
+from nanoslides.cli.commands.export import export_command
 from nanoslides.cli.commands.generate import generate_command
 from nanoslides.cli.commands.init import init_command
 from nanoslides.cli.commands.setup import setup_command
@@ -37,6 +38,7 @@ app.command("init")(init_command)
 app.command("setup")(setup_command)
 app.command("generate")(generate_command)
 app.command("edit")(edit_command)
+app.command("export")(export_command)
 app.add_typer(style_app, name="style")
 
 
