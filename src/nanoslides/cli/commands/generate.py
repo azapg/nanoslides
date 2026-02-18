@@ -15,8 +15,10 @@ from nanoslides.core.config import GlobalConfig, get_gemini_api_key, load_global
 from nanoslides.core.project import (
     PROJECT_STATE_FILE,
     SlideEntry,
+    dedupe_slide_id,
     load_project_state,
     save_project_state,
+    suggest_slide_id,
 )
 from nanoslides.core.style import (
     load_global_styles,
@@ -52,7 +54,7 @@ def generate_command(
     references: list[Path] | None = typer.Option(
         None,
         "--references",
-        help="Additional reference image paths (repeat --references for multiple files).",
+        help="Additional reference image paths (e.g. --references file1.png file2.png).",
         exists=True,
         file_okay=True,
         dir_okay=False,
@@ -79,7 +81,11 @@ def generate_command(
     selected_prompt = prompt
     selected_model = model
     selected_style_id = style_id
-    selected_references = list(references or [])
+    try:
+        selected_references = _resolve_cli_references(references, ctx.args)
+    except ValueError as exc:
+        console.print(f"[bold red]{exc}[/]")
+        raise typer.Exit(code=1) from exc
     if not no_interactive and sys.stdin.isatty() and not selected_prompt:
         (
             selected_prompt,
@@ -123,7 +129,14 @@ def generate_command(
         console.print(f"[bold red]Generation failed: {exc}[/]")
         raise typer.Exit(code=1) from exc
 
-    _append_slide_to_project(result.revised_prompt, result.local_path, result.metadata)
+    final_local_path = _append_slide_to_project(
+        result.revised_prompt,
+        result.local_path,
+        result.metadata,
+    )
+    if final_local_path is not None:
+        result.local_path = final_local_path
+        result.image_url = final_local_path.resolve().as_uri()
     style_label = merged_style.style_id or "project/default"
     references_count = len(merged_style.reference_images)
     console.print(
@@ -224,20 +237,74 @@ def _append_slide_to_project(
     prompt: str,
     local_path: Path | None,
     metadata: dict[str, object],
-) -> None:
+) -> Path | None:
     if not PROJECT_STATE_FILE.exists():
-        return
+        return local_path
 
     project = load_project_state()
     next_order = max((slide.order for slide in project.slides), default=0) + 1
+    existing_ids = {slide.id for slide in project.slides}
+    slide_id = dedupe_slide_id(suggest_slide_id(prompt), existing_ids)
+    renamed_path = _rename_slide_file(local_path, next_order, slide_id)
     project.slides.append(
         SlideEntry(
+            id=slide_id,
             order=next_order,
             prompt=prompt,
-            image_path=str(local_path) if local_path else None,
+            image_path=str(renamed_path) if renamed_path else None,
             metadata=metadata,
         )
     )
     save_project_state(project)
+    return renamed_path
+
+
+def _resolve_cli_references(
+    references: list[Path] | None,
+    extra_args: list[str],
+) -> list[Path]:
+    resolved = list(references or [])
+    for extra_arg in extra_args:
+        if extra_arg.startswith("-"):
+            raise ValueError(f"Unexpected option: {extra_arg}")
+        path = Path(extra_arg).expanduser()
+        if not path.exists() or not path.is_file():
+            raise ValueError(f"Reference image not found: {path}")
+        resolved.append(path)
+    return _unique_paths(resolved)
+
+
+def _unique_paths(paths: list[Path]) -> list[Path]:
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for path in paths:
+        normalized = str(path.expanduser().resolve())
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(Path(normalized))
+    return unique
+
+
+def _rename_slide_file(local_path: Path | None, order: int, slide_id: str) -> Path | None:
+    if local_path is None or not local_path.exists():
+        return local_path
+
+    suffix = local_path.suffix
+    target = local_path.with_name(f"{order}_{slide_id}{suffix}")
+    if target == local_path:
+        return local_path
+
+    if target.exists():
+        counter = 2
+        while True:
+            candidate = local_path.with_name(f"{order}_{slide_id}-{counter}{suffix}")
+            if not candidate.exists():
+                target = candidate
+                break
+            counter += 1
+
+    local_path.rename(target)
+    return target
 
 

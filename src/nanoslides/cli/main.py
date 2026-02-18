@@ -36,7 +36,7 @@ def main(
 
 app.command("init")(init_command)
 app.command("setup")(setup_command)
-app.command("generate")(generate_command)
+app.command("generate", context_settings={"allow_extra_args": True})(generate_command)
 app.command("edit")(edit_command)
 app.command("export")(export_command)
 app.add_typer(style_app, name="styles")
