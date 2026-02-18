@@ -7,6 +7,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
+from rich.table import Table
 
 from nanoslides.core.style import (
     GLOBAL_STYLES_PATH,
@@ -14,12 +15,24 @@ from nanoslides.core.style import (
     ProjectStyleConfig,
     StyleDefinition,
     load_global_styles,
+    load_project_style,
     save_global_styles,
     save_project_style,
 )
 
-style_app = typer.Typer(help="Style management commands.")
+style_app = typer.Typer(
+    help="Style management commands.",
+    invoke_without_command=True,
+)
 console = Console()
+
+
+@style_app.callback()
+def style_callback(ctx: typer.Context) -> None:
+    """List styles when no subcommand is provided."""
+    if ctx.invoked_subcommand is not None:
+        return
+    _render_style_listing()
 
 
 @style_app.command("create")
@@ -38,10 +51,13 @@ def style_create_command(
         "--negative-prompt",
         help="Negative prompt included in every generation/edit call.",
     ),
-    reference_image: list[Path] | None = typer.Option(
+    slides_base_reference: list[Path] | None = typer.Option(
         None,
-        "--reference-image",
-        help="Reference image path (repeat --reference-image for multiple files).",
+        "--slides-base-reference",
+        help=(
+            "Image sent with every slide request for style consistency "
+            "(repeat --slides-base-reference for multiple files)."
+        ),
         exists=True,
         file_okay=True,
         dir_okay=False,
@@ -68,7 +84,7 @@ def style_create_command(
     resolved_style_id = style_id
     resolved_base_prompt = base_prompt.strip()
     resolved_negative_prompt = negative_prompt.strip()
-    resolved_reference_images = [str(path) for path in (reference_image or [])]
+    resolved_reference_images = [str(path) for path in (slides_base_reference or [])]
     resolved_reference_comments = [
         comment.strip() for comment in (reference_comment or []) if comment.strip()
     ]
@@ -125,6 +141,180 @@ def style_create_command(
     console.print(f"[bold green]Saved project style to {PROJECT_STYLE_PATH}.[/]")
 
 
+@style_app.command("edit")
+def style_edit_command(
+    style_id: str = typer.Argument(..., help="Global style ID to modify."),
+    base_prompt: str | None = typer.Option(
+        None,
+        "--base-prompt",
+        help="Updated base prompt included in every generation/edit call.",
+    ),
+    negative_prompt: str | None = typer.Option(
+        None,
+        "--negative-prompt",
+        help="Updated negative prompt included in every generation/edit call.",
+    ),
+    slides_base_reference: list[Path] | None = typer.Option(
+        None,
+        "--slides-base-reference",
+        help=(
+            "Image sent with every slide request for style consistency "
+            "(repeat --slides-base-reference for multiple files)."
+        ),
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+    ),
+    reference_comment: list[str] | None = typer.Option(
+        None,
+        "--reference-comment",
+        help="Updated reference comments (repeat --reference-comment for multiple entries).",
+    ),
+    no_interactive: bool = typer.Option(
+        False,
+        "--no-interactive",
+        help="Disable guided prompts and use only provided arguments/options.",
+    ),
+) -> None:
+    """Edit an existing global style preset."""
+    styles = load_global_styles()
+    existing = styles.styles.get(style_id)
+    if existing is None:
+        console.print(f"[bold red]Global style '{style_id}' was not found.[/]")
+        raise typer.Exit(code=1)
+
+    use_guided_edit = (
+        not no_interactive
+        and sys.stdin.isatty()
+        and base_prompt is None
+        and negative_prompt is None
+        and slides_base_reference is None
+        and reference_comment is None
+    )
+
+    if use_guided_edit:
+        (
+            resolved_base_prompt,
+            resolved_negative_prompt,
+            resolved_reference_images,
+            resolved_reference_comments,
+        ) = _collect_style_edit_inputs(existing)
+    else:
+        resolved_base_prompt = (
+            existing.base_prompt if base_prompt is None else base_prompt.strip()
+        )
+        resolved_negative_prompt = (
+            existing.negative_prompt if negative_prompt is None else negative_prompt.strip()
+        )
+        resolved_reference_images = (
+            existing.reference_images
+            if slides_base_reference is None
+            else [str(path.expanduser().resolve()) for path in slides_base_reference]
+        )
+        resolved_reference_comments = (
+            existing.reference_comments
+            if reference_comment is None
+            else [comment.strip() for comment in reference_comment if comment.strip()]
+        )
+
+    styles.styles[style_id] = StyleDefinition(
+        base_prompt=resolved_base_prompt,
+        negative_prompt=resolved_negative_prompt,
+        reference_images=resolved_reference_images,
+        reference_comments=resolved_reference_comments,
+    )
+    save_global_styles(styles)
+    console.print(f"[bold green]Updated global style '{style_id}'.[/]")
+
+
+def _render_style_listing() -> None:
+    project_style = load_project_style()
+    global_styles = load_global_styles().styles
+
+    table = Table(title="Available styles", show_header=True, header_style="bold")
+    table.add_column("Style")
+    table.add_column("Scope")
+    table.add_column("Details")
+
+    if project_style is not None:
+        project_label = project_style.style_id or "project-default"
+        table.add_row(
+            project_label,
+            "project",
+            _style_summary(project_style),
+        )
+
+    for style_id in sorted(global_styles.keys()):
+        table.add_row(style_id, "global", _style_summary(global_styles[style_id]))
+
+    if table.row_count:
+        console.print(table)
+    else:
+        console.print("[yellow]No styles found yet.[/]")
+    console.print("[dim]Hint: run `nanoslides styles --help` for help.[/]")
+
+
+def _style_summary(style: StyleDefinition) -> str:
+    bits: list[str] = []
+    if style.base_prompt:
+        bits.append("base prompt")
+    if style.negative_prompt:
+        bits.append("negative prompt")
+    if style.reference_images:
+        bits.append(f"{len(style.reference_images)} slides base refs")
+    if style.reference_comments:
+        bits.append(f"{len(style.reference_comments)} comment refs")
+    return ", ".join(bits) if bits else "empty"
+
+
+def _collect_style_edit_inputs(
+    existing: StyleDefinition,
+) -> tuple[str, str, list[str], list[str]]:
+    console.print(
+        Panel.fit(
+            "[bold cyan]Guided style edit[/]\nWe'll update this global style step by step.",
+            title="nanoslides",
+            border_style="cyan",
+        )
+    )
+
+    resolved_base_prompt = Prompt.ask(
+        "1) Base prompt (optional)",
+        default=existing.base_prompt,
+    ).strip()
+    resolved_negative_prompt = Prompt.ask(
+        "2) Negative prompt (optional)",
+        default=existing.negative_prompt,
+    ).strip()
+
+    current_references = ", ".join(existing.reference_images)
+    raw_references = Prompt.ask(
+        "3) Slides base references (comma-separated paths, optional)",
+        default=current_references,
+    ).strip()
+    if raw_references == current_references:
+        resolved_reference_images = existing.reference_images
+    else:
+        resolved_reference_images = _parse_slides_base_reference_input(raw_references)
+
+    current_comments = ", ".join(existing.reference_comments)
+    raw_comments = Prompt.ask(
+        "4) Reference comments (comma-separated, optional)",
+        default=current_comments,
+    ).strip()
+    resolved_reference_comments = [
+        comment.strip() for comment in raw_comments.split(",") if comment.strip()
+    ]
+
+    return (
+        resolved_base_prompt,
+        resolved_negative_prompt,
+        resolved_reference_images,
+        resolved_reference_comments,
+    )
+
+
 def _collect_style_inputs(
     *,
     global_scope: bool,
@@ -172,7 +362,10 @@ def _collect_style_inputs(
 
     resolved_reference_images = reference_images
     if not resolved_reference_images:
-        maybe_image = Prompt.ask("6) Reference image path (optional)", default="").strip()
+        maybe_image = Prompt.ask(
+            "6) Slides base reference image path (optional)",
+            default="",
+        ).strip()
         if maybe_image:
             image_path = Path(maybe_image).expanduser()
             if not image_path.exists() or not image_path.is_file():
@@ -187,6 +380,19 @@ def _collect_style_inputs(
         resolved_reference_images,
         resolved_reference_comments,
     )
+
+
+def _parse_slides_base_reference_input(raw_value: str) -> list[str]:
+    references: list[str] = []
+    for token in raw_value.split(","):
+        cleaned = token.strip()
+        if not cleaned:
+            continue
+        path = Path(cleaned).expanduser()
+        if not path.exists() or not path.is_file():
+            raise ValueError(f"Reference image not found: {path}")
+        references.append(str(path.resolve()))
+    return references
 
 
 @style_app.command("steal")

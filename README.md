@@ -11,7 +11,8 @@ nanoslides --help
 nanoslides setup
 nanoslides init MyProject
 nanoslides styles create
-nanoslides styles create studio-look --global --base-prompt "High-end studio product look"
+nanoslides styles create historic --global --slides-base-reference .\image.png
+nanoslides styles edit historic --slides-base-reference .\image.png
 nanoslides styles
 nanoslides generate "A minimalist title slide about AI safety" --model flash
 nanoslides export --format pptx
@@ -26,6 +27,8 @@ and foundational CLI commands, including NanoBanana-backed slide generation.
   `reference_images`, `reference_comments`, and optional `style_id`).
 - Global reusable presets live in `~/.nanoslides/styles.json` and can be selected
   with `--style-id` or by setting `style_id` in project `style.json`.
+- Use `--slides-base-reference` on `nanoslides styles create/edit` for images that
+  are included in all slide generation/edit requests for visual consistency.
 - `nanoslides generate` automatically merges global + project style context and
   injects it into generation/edit prompts and reference inputs.
 
@@ -33,7 +36,7 @@ and foundational CLI commands, including NanoBanana-backed slide generation.
 
 - `nanoslides generate` runs directly when a prompt is provided, and only opens
   the guided prompt/model/style/reference flow when the prompt is omitted.
-- `nanoslides styles create` also guides style creation step by step.
+- `nanoslides styles create` and `nanoslides styles edit` support guided setup.
 - `nanoslides generate` defaults to a `16:9` output aspect ratio; override with
   `--aspect-ratio` for other formats.
 - Long image generation calls display a spinner/status indicator.
