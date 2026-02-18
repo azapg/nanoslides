@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
 from pathlib import Path
 import re
 from typing import Any
@@ -11,7 +12,9 @@ import unicodedata
 from pydantic import BaseModel, Field, field_validator
 import yaml
 
-PROJECT_STATE_FILE = Path("slides.yaml")
+PROJECT_STATE_FILE = Path("slides.json")
+LEGACY_PROJECT_STATE_FILE = Path("slides.yaml")
+PROJECT_STATE_SCHEMA_VERSION = 1
 _SLIDE_ID_TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9]+")
 _SLIDE_ID_STOPWORDS = {
     "about",
@@ -85,8 +88,9 @@ class SlideEntry(BaseModel):
 
 
 class ProjectState(BaseModel):
-    """State file model stored in ./slides.yaml."""
+    """State file model stored in ./slides.json."""
 
+    schema_version: int = Field(default=PROJECT_STATE_SCHEMA_VERSION, ge=1)
     name: str
     created_at: datetime
     engine: str
@@ -94,8 +98,9 @@ class ProjectState(BaseModel):
 
 
 def load_project_state(path: Path = PROJECT_STATE_FILE) -> ProjectState:
-    """Load local project state from YAML."""
-    raw_data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    """Load local project state from disk."""
+    source_path = _resolve_project_state_path(path)
+    raw_data = _load_state_payload(source_path)
     data = raw_data if raw_data is not None else {}
     slides = data.get("slides")
     if isinstance(slides, list):
@@ -113,14 +118,50 @@ def load_project_state(path: Path = PROJECT_STATE_FILE) -> ProjectState:
             unique_id = dedupe_slide_id(base_id, existing_ids)
             slide["id"] = unique_id
             existing_ids.add(unique_id)
-    return ProjectState.model_validate(data)
+    state = ProjectState.model_validate(data)
+    _migrate_project_state(path=path, source_path=source_path, state=state)
+    return state
 
 
 def save_project_state(state: ProjectState, path: Path = PROJECT_STATE_FILE) -> None:
-    """Write local project state to YAML."""
+    """Write local project state to disk."""
     serialized = state.model_dump(mode="json")
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(serialized, sort_keys=False), encoding="utf-8")
+    if path.suffix.lower() == ".json":
+        path.write_text(json.dumps(serialized, indent=2) + "\n", encoding="utf-8")
+    else:
+        path.write_text(yaml.safe_dump(serialized, sort_keys=False), encoding="utf-8")
+    legacy_path = _legacy_project_state_path(path)
+    if path.suffix.lower() == ".json" and legacy_path.exists():
+        legacy_path.unlink()
+
+
+def _resolve_project_state_path(path: Path) -> Path:
+    if path.exists():
+        return path
+    legacy_path = _legacy_project_state_path(path)
+    if legacy_path.exists():
+        return legacy_path
+    return path
+
+
+def _legacy_project_state_path(path: Path) -> Path:
+    return path.with_name(LEGACY_PROJECT_STATE_FILE.name)
+
+
+def _load_state_payload(path: Path) -> Any:
+    raw_text = path.read_text(encoding="utf-8")
+    if path.suffix.lower() == ".json":
+        return json.loads(raw_text)
+    return yaml.safe_load(raw_text)
+
+
+def _migrate_project_state(*, path: Path, source_path: Path, state: ProjectState) -> None:
+    if source_path == path or path.suffix.lower() != ".json":
+        return
+    save_project_state(state, path)
+    if source_path.exists():
+        source_path.unlink()
 
 
 def _normalize_slide_id(value: str) -> str:

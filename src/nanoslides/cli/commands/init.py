@@ -18,7 +18,7 @@ def init_command(
     ctx: typer.Context,
     name: str | None = typer.Argument(
         None,
-        help="Optional project name/folder (creates ./<name>/slides.yaml when provided).",
+        help="Optional project name/folder (creates ./<name>/slides.json when provided).",
     ),
     force: bool = typer.Option(
         False,
