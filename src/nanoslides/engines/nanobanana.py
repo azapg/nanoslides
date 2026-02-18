@@ -98,7 +98,7 @@ class NanoBananaSlideEngine(SlideEngine):
         mask: dict[str, Any] | None = None,
     ) -> SlideResult:
         resolved_style = style or _style_from_style_id(style_id)
-        revised_prompt = _build_prompt(instruction, resolved_style)
+        revised_prompt = _build_prompt(instruction, resolved_style, is_edit=True)
         contents: list[Any] = [revised_prompt, _bytes_part(image)]
         contents.extend(_style_reference_parts(resolved_style))
         response = self._client.models.generate_content(
@@ -175,21 +175,35 @@ def _resolve_api_key(api_key: str | None) -> str:
     )
 
 
-def _build_prompt(prompt: str, style: ResolvedStyle | None = None) -> str:
-    if style is None:
+def _build_prompt(
+    prompt: str,
+    style: ResolvedStyle | None = None,
+    *,
+    is_edit: bool = False,
+) -> str:
+    if style is None and not is_edit:
         return prompt
 
     sections: list[str] = []
-    if style.base_prompt:
+    if style is not None and style.base_prompt:
         sections.append(style.base_prompt)
     sections.append(prompt)
-    if style.reference_comments:
+    if style is not None and style.reference_images:
+        sections.append(
+            f"{len(style.reference_images)} style reference image(s) are attached. "
+            "Use them only as visual style guidance for palette, tone, and texture."
+        )
+    if style is not None and style.reference_comments:
         comments = "\n".join(f"- {comment}" for comment in style.reference_comments)
         sections.append(f"Style references:\n{comments}")
-    if style.negative_prompt:
+    if style is not None and style.negative_prompt:
         sections.append(f"Avoid:\n{style.negative_prompt}")
-    if style.style_id:
+    if style is not None and style.style_id:
         sections.append(f"Apply global style preset: {style.style_id}")
+    if is_edit:
+        sections.append(
+            "Do not modify anything else except what is specified by the user."
+        )
 
     return "\n\n".join(section for section in sections if section)
 
