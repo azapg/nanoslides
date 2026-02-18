@@ -9,7 +9,8 @@ with AI image models.
 pip install .
 nanoslides --help
 nanoslides init MyProject
+nanoslides generate "A minimalist title slide about AI safety" --model flash
 ```
 
 This repository currently includes the architecture skeleton, configuration loading,
-and CLI command stubs for future implementation phases.
+and foundational CLI commands, including NanoBanana-backed slide generation.

@@ -1,0 +1,180 @@
+"""Nano Banana engine implementation using the Gemini API."""
+
+from __future__ import annotations
+
+import base64
+from datetime import datetime, timezone
+from enum import Enum
+import os
+from pathlib import Path
+from typing import Any
+
+from google import genai
+from google.genai import types
+
+from nanoslides.core.interfaces import SlideEngine, SlideResult
+
+_MODEL_MAP = {
+    "flash": "gemini-2.5-flash-image",
+    "pro": "gemini-3-pro-image-preview",
+}
+_SUPPORTED_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp"}
+
+
+class NanoBananaModel(str, Enum):
+    """Supported Nano Banana model selectors."""
+
+    FLASH = "flash"
+    PRO = "pro"
+
+    @property
+    def api_model(self) -> str:
+        return _MODEL_MAP[self.value]
+
+
+class NanoBananaSlideEngine(SlideEngine):
+    """SlideEngine backed by Gemini Nano Banana image generation."""
+
+    def __init__(
+        self,
+        *,
+        model: NanoBananaModel = NanoBananaModel.FLASH,
+        api_key: str | None = None,
+        output_dir: Path | str = "./slides",
+    ) -> None:
+        self.model = model
+        self._api_model = model.api_model
+        self._output_dir = Path(output_dir)
+        self._client = genai.Client(api_key=_resolve_api_key(api_key))
+
+    def generate(
+        self, prompt: str, style_id: str, ref_image: bytes | None = None
+    ) -> SlideResult:
+        revised_prompt = _build_prompt(prompt, style_id)
+        contents: list[Any] = [revised_prompt]
+        if ref_image is not None:
+            contents.append(_bytes_part(ref_image))
+
+        response = self._client.models.generate_content(
+            model=self._api_model,
+            contents=contents,
+            config=types.GenerateContentConfig(response_modalities=["TEXT", "IMAGE"]),
+        )
+        return self._to_slide_result(response, revised_prompt=revised_prompt)
+
+    def edit(
+        self,
+        image: bytes,
+        instruction: str,
+        mask: dict[str, Any] | None = None,
+    ) -> SlideResult:
+        response = self._client.models.generate_content(
+            model=self._api_model,
+            contents=[instruction, _bytes_part(image)],
+            config=types.GenerateContentConfig(response_modalities=["TEXT", "IMAGE"]),
+        )
+        result = self._to_slide_result(response, revised_prompt=instruction)
+        if mask is not None:
+            result.metadata["mask"] = mask
+        return result
+
+    def _to_slide_result(self, response: Any, *, revised_prompt: str) -> SlideResult:
+        text_parts: list[str] = []
+        image_bytes: bytes | None = None
+        image_mime_type = "image/png"
+
+        for part in _response_parts(response):
+            text = getattr(part, "text", None)
+            if text:
+                text_parts.append(text)
+
+            inline_data = getattr(part, "inline_data", None)
+            if inline_data is not None and image_bytes is None:
+                image_bytes = _inline_data_bytes(inline_data)
+                image_mime_type = getattr(inline_data, "mime_type", "image/png")
+
+        if image_bytes is None:
+            raise RuntimeError("NanoBanana returned no image in the response.")
+
+        local_path = self._persist_image(image_bytes, image_mime_type)
+        metadata: dict[str, Any] = {
+            "engine": "nanobanana",
+            "model_selector": self.model.value,
+            "model": self._api_model,
+            "mime_type": image_mime_type,
+        }
+        if text_parts:
+            metadata["response_text"] = "\n".join(text_parts)
+
+        return SlideResult(
+            image_url=local_path.resolve().as_uri(),
+            local_path=local_path,
+            revised_prompt=revised_prompt,
+            metadata=metadata,
+        )
+
+    def _persist_image(self, image_bytes: bytes, mime_type: str) -> Path:
+        extension = _file_extension_for_mime_type(mime_type)
+        self._output_dir.mkdir(parents=True, exist_ok=True)
+        file_name = (
+            f"slide-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}.{extension}"
+        )
+        local_path = self._output_dir / file_name
+        local_path.write_bytes(image_bytes)
+        return local_path
+
+
+def _resolve_api_key(api_key: str | None) -> str:
+    resolved_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if resolved_key:
+        return resolved_key
+    raise ValueError(
+        "Missing Gemini API key. Set api_keys.nanobanana in config.toml or define "
+        "GEMINI_API_KEY."
+    )
+
+
+def _build_prompt(prompt: str, style_id: str) -> str:
+    if style_id == "default":
+        return prompt
+    return f"{prompt}\n\nUse this style preset: {style_id}"
+
+
+def _bytes_part(image_bytes: bytes) -> types.Part:
+    return types.Part.from_bytes(data=image_bytes, mime_type="image/png")
+
+
+def _response_parts(response: Any) -> list[Any]:
+    direct_parts = getattr(response, "parts", None)
+    if direct_parts is not None:
+        return list(direct_parts)
+
+    candidates = getattr(response, "candidates", None) or []
+    if not candidates:
+        return []
+
+    content = getattr(candidates[0], "content", None)
+    parts = getattr(content, "parts", None) or []
+    return list(parts)
+
+
+def _inline_data_bytes(inline_data: Any) -> bytes:
+    data = getattr(inline_data, "data", b"")
+    if isinstance(data, bytes):
+        return data
+    if isinstance(data, str):
+        try:
+            return base64.b64decode(data)
+        except ValueError:
+            return data.encode("utf-8")
+    raise TypeError("Unsupported inline image payload type.")
+
+
+def _file_extension_for_mime_type(mime_type: str) -> str:
+    normalized = mime_type.lower()
+    if normalized not in _SUPPORTED_IMAGE_MIME_TYPES:
+        return "png"
+    if normalized == "image/jpeg":
+        return "jpg"
+    return normalized.split("/", maxsplit=1)[1]
+
