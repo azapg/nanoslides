@@ -33,6 +33,21 @@ class NanoBananaModel(str, Enum):
         return _MODEL_MAP[self.value]
 
 
+class ImageAspectRatio(str, Enum):
+    """Supported image aspect ratios for generation."""
+
+    RATIO_1_1 = "1:1"
+    RATIO_2_3 = "2:3"
+    RATIO_3_2 = "3:2"
+    RATIO_3_4 = "3:4"
+    RATIO_4_3 = "4:3"
+    RATIO_4_5 = "4:5"
+    RATIO_5_4 = "5:4"
+    RATIO_9_16 = "9:16"
+    RATIO_16_9 = "16:9"
+    RATIO_21_9 = "21:9"
+
+
 class NanoBananaSlideEngine(SlideEngine):
     """SlideEngine backed by Gemini Nano Banana image generation."""
 
@@ -53,21 +68,26 @@ class NanoBananaSlideEngine(SlideEngine):
         prompt: str,
         style_id: str = "default",
         style: ResolvedStyle | None = None,
-        ref_image: bytes | None = None,
+        aspect_ratio: ImageAspectRatio = ImageAspectRatio.RATIO_16_9,
     ) -> SlideResult:
         resolved_style = style or _style_from_style_id(style_id)
         revised_prompt = _build_prompt(prompt, resolved_style)
         contents: list[Any] = [revised_prompt]
         contents.extend(_style_reference_parts(resolved_style))
-        if ref_image is not None:
-            contents.append(_bytes_part(ref_image))
 
         response = self._client.models.generate_content(
             model=self._api_model,
             contents=contents,
-            config=types.GenerateContentConfig(response_modalities=["TEXT", "IMAGE"]),
+            config=types.GenerateContentConfig(
+                response_modalities=["TEXT", "IMAGE"],
+                image_config=types.ImageConfig(aspect_ratio=aspect_ratio.value),
+            ),
         )
-        return self._to_slide_result(response, revised_prompt=revised_prompt)
+        return self._to_slide_result(
+            response,
+            revised_prompt=revised_prompt,
+            aspect_ratio=aspect_ratio,
+        )
 
     def edit(
         self,
@@ -91,7 +111,13 @@ class NanoBananaSlideEngine(SlideEngine):
             result.metadata["mask"] = mask
         return result
 
-    def _to_slide_result(self, response: Any, *, revised_prompt: str) -> SlideResult:
+    def _to_slide_result(
+        self,
+        response: Any,
+        *,
+        revised_prompt: str,
+        aspect_ratio: ImageAspectRatio | None = None,
+    ) -> SlideResult:
         text_parts: list[str] = []
         image_bytes: bytes | None = None
         image_mime_type = "image/png"
@@ -116,6 +142,8 @@ class NanoBananaSlideEngine(SlideEngine):
             "model": self._api_model,
             "mime_type": image_mime_type,
         }
+        if aspect_ratio is not None:
+            metadata["aspect_ratio"] = aspect_ratio.value
         if text_parts:
             metadata["response_text"] = "\n".join(text_parts)
 

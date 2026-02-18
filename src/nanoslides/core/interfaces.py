@@ -29,7 +29,6 @@ class SlideEngine(ABC):
         prompt: str,
         style_id: str = "default",
         style: ResolvedStyle | None = None,
-        ref_image: bytes | None = None,
     ) -> SlideResult:
         """Generate a slide from scratch."""
 

@@ -19,8 +19,8 @@ from nanoslides.core.project import (
     save_project_state,
 )
 from nanoslides.core.style import (
-    ResolvedStyle,
     load_global_styles,
+    merge_style_references,
     load_project_style,
     resolve_style_context,
 )
@@ -48,15 +48,6 @@ def generate_command(
         None,
         "--style-id",
         help="Global style preset ID override (prompted in interactive mode).",
-    ),
-    ref_image: Path | None = typer.Option(
-        None,
-        "--ref-image",
-        help="Optional reference image path (prompted in interactive mode).",
-        exists=True,
-        file_okay=True,
-        dir_okay=False,
-        readable=True,
     ),
     references: list[Path] | None = typer.Option(
         None,
@@ -88,19 +79,18 @@ def generate_command(
     selected_prompt = prompt
     selected_model = model
     selected_style_id = style_id
-    selected_ref_image = ref_image
     selected_references = list(references or [])
     if not no_interactive and sys.stdin.isatty() and not selected_prompt:
         (
             selected_prompt,
             selected_model,
             selected_style_id,
-            selected_ref_image,
+            selected_references,
         ) = _collect_interactive_inputs(
             prompt=selected_prompt,
             model=selected_model,
             style_id=selected_style_id,
-            ref_image=selected_ref_image,
+            references=selected_references,
         )
 
     if not selected_prompt:
@@ -115,10 +105,7 @@ def generate_command(
     try:
         with console.status("[bold cyan]Generating slide...[/]", spinner="dots"):
             resolved_style = resolve_style_context(style_id=effective_style_id)
-            merged_style = _merge_style_references(
-                resolved_style,
-                [*selected_references, *([selected_ref_image] if selected_ref_image else [])],
-            )
+            merged_style = merge_style_references(resolved_style, selected_references)
             engine = NanoBananaSlideEngine(
                 model=effective_model,
                 api_key=api_key,
@@ -158,8 +145,8 @@ def _collect_interactive_inputs(
     prompt: str | None,
     model: NanoBananaModel | None,
     style_id: str | None,
-    ref_image: Path | None,
-) -> tuple[str, NanoBananaModel, str, Path | None]:
+    references: list[Path],
+) -> tuple[str, NanoBananaModel, str, list[Path]]:
     console.print(
         Panel.fit(
             "[bold cyan]Guided generation[/]\nWe'll configure this slide step by step.",
@@ -170,8 +157,8 @@ def _collect_interactive_inputs(
     prompt_value = prompt or Prompt.ask("1) Slide prompt")
     model_value = _prompt_model(model)
     style_value = _prompt_style_id(style_id)
-    ref_image_value = ref_image or _prompt_reference_image()
-    return prompt_value, model_value, style_value, ref_image_value
+    references_value = references or _prompt_references()
+    return prompt_value, model_value, style_value, references_value
 
 
 def _prompt_model(model: NanoBananaModel | None) -> NanoBananaModel:
@@ -210,15 +197,21 @@ def _prompt_style_id(style_id: str | None) -> str:
     return selected_style_id
 
 
-def _prompt_reference_image() -> Path | None:
-    raw_path = Prompt.ask("4) Reference image path (optional)", default="").strip()
-    if not raw_path:
-        return None
+def _prompt_references() -> list[Path]:
+    raw_paths = Prompt.ask(
+        "4) Reference image paths (optional, comma-separated)",
+        default="",
+    ).strip()
+    if not raw_paths:
+        return []
 
-    path = Path(raw_path).expanduser()
-    if not path.exists() or not path.is_file():
-        raise ValueError(f"Reference image not found: {path}")
-    return path
+    references: list[Path] = []
+    for raw_path in raw_paths.split(","):
+        path = Path(raw_path.strip()).expanduser()
+        if not path.exists() or not path.is_file():
+            raise ValueError(f"Reference image not found: {path}")
+        references.append(path)
+    return references
 
 
 def _resolve_config(ctx: typer.Context) -> GlobalConfig:
@@ -248,29 +241,3 @@ def _append_slide_to_project(
     save_project_state(project)
 
 
-def _merge_style_references(
-    style: ResolvedStyle,
-    references: list[Path],
-) -> ResolvedStyle:
-    if not references:
-        return style
-
-    merged_reference_images = _unique_strings(
-        [
-            *style.reference_images,
-            *(str(path.expanduser().resolve()) for path in references),
-        ]
-    )
-    return style.model_copy(update={"reference_images": merged_reference_images})
-
-
-def _unique_strings(values: list[str]) -> list[str]:
-    seen: set[str] = set()
-    unique: list[str] = []
-    for value in values:
-        normalized = value.strip()
-        if not normalized or normalized in seen:
-            continue
-        seen.add(normalized)
-        unique.append(normalized)
-    return unique

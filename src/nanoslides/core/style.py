@@ -38,6 +38,17 @@ class ResolvedStyle(StyleDefinition):
     style_id: str | None = None
 
 
+def merge_style_references(style: ResolvedStyle, references: list[Path]) -> ResolvedStyle:
+    """Merge ad-hoc reference paths into a resolved style context."""
+    if not references:
+        return style
+
+    merged_reference_images = _unique(
+        [*style.reference_images, *(str(path.expanduser().resolve()) for path in references)]
+    )
+    return style.model_copy(update={"reference_images": merged_reference_images})
+
+
 def load_project_style(path: Path = PROJECT_STYLE_PATH) -> ProjectStyleConfig | None:
     """Load project style config when present."""
     if not path.exists():

@@ -15,6 +15,8 @@ nanoslides styles create historic --global --slides-base-reference .\image.png
 nanoslides styles edit historic --slides-base-reference .\image.png
 nanoslides styles
 nanoslides generate "A minimalist title slide about AI safety" --model flash
+nanoslides edit slide-abc123 "Translate all text to Spanish"
+nanoslides edit .\slides\slide-abc123.png "Replace the person in the top-left with Ricardo J. Alfaro" --references .\rja.png
 nanoslides export --format pptx
 ```
 
