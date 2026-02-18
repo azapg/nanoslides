@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import sys
 
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from rich.prompt import Confirm
 
 from nanoslides.core.config import GlobalConfig, get_gemini_api_key, load_global_config
 from nanoslides.core.project import (
     PROJECT_STATE_FILE,
     ProjectState,
     SlideEntry,
+    dedupe_slide_id,
     load_project_state,
     save_project_state,
 )
@@ -63,6 +66,9 @@ def edit_command(
     effective_model = model or NanoBananaModel.PRO
     effective_style_id = style_id or "default"
     selected_references = list(references or [])
+    project_state: ProjectState | None = None
+    slide_entry: SlideEntry | None = None
+    draft_entry: SlideEntry | None = None
 
     try:
         with console.status("[bold cyan]Editing slide...[/]", spinner="dots"):
@@ -79,7 +85,7 @@ def edit_command(
                 instruction=instruction,
                 style=merged_style,
             )
-            _update_project_slide(
+            draft_entry = _create_edit_draft(
                 project_state=project_state,
                 slide_entry=slide_entry,
                 source_image_path=source_image_path,
@@ -97,6 +103,37 @@ def edit_command(
     style_label = merged_style.style_id or "project/default"
     references_count = len(merged_style.reference_images)
     source_label = slide_entry.id if slide_entry else str(source_image_path)
+    if draft_entry is not None and slide_entry is not None and project_state is not None:
+        console.print(
+            Panel.fit(
+                f"[bold yellow]Draft slide saved[/]\n"
+                f"Source: [bold]{source_label}[/]\n"
+                f"Draft ID: [bold]{draft_entry.id}[/]\n"
+                f"Model: [bold]{effective_model.value}[/]\n"
+                f"Style: [bold]{style_label}[/]\n"
+                f"References: [bold]{references_count}[/]\n"
+                f"Saved to [bold]{result.local_path}[/]\n"
+                f"Status: [bold]Needs review before applying[/]",
+                title="nanoslides",
+                border_style="yellow",
+            )
+        )
+        if _should_apply_draft(slide_entry.id, draft_entry.id):
+            _apply_draft_to_slide(
+                project_state=project_state,
+                slide_entry=slide_entry,
+                draft_entry=draft_entry,
+            )
+            console.print(
+                f"[bold green]Draft '{draft_entry.id}' applied to slide "
+                f"'{slide_entry.id}'.[/]"
+            )
+        else:
+            console.print(
+                f"[bold yellow]Draft '{draft_entry.id}' kept for later review.[/]"
+            )
+        return
+
     console.print(
         Panel.fit(
             f"[bold green]Slide edited[/]\n"
@@ -175,7 +212,7 @@ def _normalize_path(path: Path) -> str:
     return os.path.normcase(str(path.resolve()))
 
 
-def _update_project_slide(
+def _create_edit_draft(
     *,
     project_state: ProjectState | None,
     slide_entry: SlideEntry | None,
@@ -183,17 +220,58 @@ def _update_project_slide(
     instruction: str,
     edited_image_path: Path | None,
     metadata: dict[str, object],
-) -> None:
+) -> SlideEntry | None:
     if project_state is None or slide_entry is None or edited_image_path is None:
-        return
+        return None
 
-    slide_entry.prompt = instruction
-    slide_entry.image_path = str(edited_image_path)
-    slide_entry.metadata = {
-        **metadata,
-        "edited_from": str(source_image_path),
-    }
+    existing_ids = {slide.id for slide in project_state.slides}
+    draft_id = dedupe_slide_id(f"{slide_entry.id}-draft", existing_ids)
+    draft_entry = SlideEntry(
+        id=draft_id,
+        order=slide_entry.order,
+        prompt=instruction,
+        image_path=str(edited_image_path),
+        metadata={
+            **metadata,
+            "review_status": "pending",
+            "edited_from": str(source_image_path),
+        },
+        is_draft=True,
+        draft_of=slide_entry.id,
+    )
+    project_state.slides.append(draft_entry)
     save_project_state(project_state)
+    return draft_entry
+
+
+def _apply_draft_to_slide(
+    *,
+    project_state: ProjectState,
+    slide_entry: SlideEntry,
+    draft_entry: SlideEntry,
+) -> None:
+    applied_metadata = {
+        **draft_entry.metadata,
+    }
+    applied_metadata.pop("review_status", None)
+    slide_entry.prompt = draft_entry.prompt
+    slide_entry.image_path = draft_entry.image_path
+    slide_entry.metadata = applied_metadata
+    slide_entry.is_draft = False
+    slide_entry.draft_of = None
+    project_state.slides = [
+        slide for slide in project_state.slides if slide.id != draft_entry.id
+    ]
+    save_project_state(project_state)
+
+
+def _should_apply_draft(source_slide_id: str, draft_id: str) -> bool:
+    if not sys.stdin.isatty():
+        return False
+    return Confirm.ask(
+        f"Draft '{draft_id}' is ready for review. Save/apply it to '{source_slide_id}' now?",
+        default=False,
+    )
 
 
 def _resolve_config(ctx: typer.Context) -> GlobalConfig:

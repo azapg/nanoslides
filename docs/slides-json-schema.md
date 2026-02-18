@@ -30,7 +30,9 @@
   "order": 1,
   "prompt": "A minimal timeline slide",
   "image_path": "build/slides/1_history-overview.png",
-  "metadata": {}
+  "metadata": {},
+  "is_draft": false,
+  "draft_of": null
 }
 ```
 
@@ -39,6 +41,15 @@
 - `prompt` (string, required): latest prompt or edit instruction recorded for this slide.
 - `image_path` (string or null, optional): generated image path for the slide.
 - `metadata` (object, required): engine/provider metadata stored as key/value pairs.
+- `is_draft` (boolean, required): whether this entry is a draft pending review.
+- `draft_of` (string or null, optional): source slide ID for drafts (`null` for non-draft slides).
+
+## Edit review draft flow
+
+- `nanoslides edit` now saves edits as draft slide entries when the target maps to a project slide.
+- The CLI marks the output as `Needs review before applying` and prompts whether to save/apply it now.
+- If approved, the draft is applied to the source slide and the draft entry is removed.
+- If not approved, the draft entry remains in `slides.json` for later review.
 
 ## Legacy migration
 

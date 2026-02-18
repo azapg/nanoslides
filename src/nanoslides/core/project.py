@@ -71,6 +71,8 @@ class SlideEntry(BaseModel):
     prompt: str = ""
     image_path: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    is_draft: bool = False
+    draft_of: str | None = None
 
     @field_validator("id", mode="before")
     @classmethod
@@ -85,6 +87,14 @@ class SlideEntry(BaseModel):
         if value in (None, ""):
             return 1
         return int(value)
+
+    @field_validator("draft_of", mode="before")
+    @classmethod
+    def normalize_draft_of(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
 
 
 class ProjectState(BaseModel):
