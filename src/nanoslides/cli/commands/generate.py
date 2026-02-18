@@ -7,7 +7,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
-from nanoslides.core.config import GlobalConfig, load_global_config
+from nanoslides.core.config import GlobalConfig, get_gemini_api_key, load_global_config
 from nanoslides.core.project import (
     PROJECT_STATE_FILE,
     SlideEntry,
@@ -47,7 +47,7 @@ def generate_command(
     """Generate a slide with the NanoBanana engine."""
     config = _resolve_config(ctx)
     target_output_dir = output_dir or Path(config.default_output_dir)
-    api_key = config.api_keys.get("nanobanana")
+    api_key = get_gemini_api_key(config)
     try:
         engine = NanoBananaSlideEngine(
             model=model,

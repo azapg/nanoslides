@@ -8,6 +8,12 @@ import tomllib
 from pydantic import BaseModel, Field
 
 GLOBAL_CONFIG_PATH = Path.home() / ".nanoslides" / "config.toml"
+GEMINI_API_KEY_NAME = "GEMINI_API_KEY"
+OPENAI_API_KEY_NAME = "OPENAI_API_KEY"
+_PROVIDER_DEFAULT_ENGINES = {
+    GEMINI_API_KEY_NAME: "nanobanana",
+    OPENAI_API_KEY_NAME: "gpt-image",
+}
 
 
 class GlobalConfig(BaseModel):
@@ -45,4 +51,32 @@ def save_global_config(config: GlobalConfig, path: Path = GLOBAL_CONFIG_PATH) ->
 
 def _escape_toml_string(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def apply_provider_api_key(
+    config: GlobalConfig,
+    *,
+    provider_key: str,
+    api_key: str,
+) -> None:
+    """Store a provider API key and update the default engine."""
+    if provider_key not in _PROVIDER_DEFAULT_ENGINES:
+        raise ValueError(f"Unsupported provider key: {provider_key}")
+
+    cleaned_api_key = api_key.strip()
+    if not cleaned_api_key:
+        raise ValueError("API key cannot be empty.")
+
+    config.api_keys[provider_key] = cleaned_api_key
+    if provider_key == GEMINI_API_KEY_NAME:
+        config.api_keys["nanobanana"] = cleaned_api_key
+    if provider_key == OPENAI_API_KEY_NAME:
+        config.api_keys["openai"] = cleaned_api_key
+
+    config.default_engine = _PROVIDER_DEFAULT_ENGINES[provider_key]
+
+
+def get_gemini_api_key(config: GlobalConfig) -> str | None:
+    """Resolve a Gemini API key from known config aliases."""
+    return config.api_keys.get(GEMINI_API_KEY_NAME) or config.api_keys.get("nanobanana")
 

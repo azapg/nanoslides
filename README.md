@@ -8,6 +8,7 @@ with AI image models.
 ```bash
 pip install .
 nanoslides --help
+nanoslides setup
 nanoslides init MyProject
 nanoslides generate "A minimalist title slide about AI safety" --model flash
 ```

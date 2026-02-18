@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from nanoslides.cli.commands.edit import edit_command
 from nanoslides.cli.commands.generate import generate_command
 from nanoslides.cli.commands.init import init_command
+from nanoslides.cli.commands.setup import setup_command
 from nanoslides.cli.commands.style import style_app
 from nanoslides.core.config import load_global_config
 from nanoslides.utils.logger import configure_logging
@@ -33,6 +34,7 @@ def main(
 
 
 app.command("init")(init_command)
+app.command("setup")(setup_command)
 app.command("generate")(generate_command)
 app.command("edit")(edit_command)
 app.add_typer(style_app, name="style")
