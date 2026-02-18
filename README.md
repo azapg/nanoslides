@@ -10,7 +10,7 @@ pip install .
 nanoslides --help
 nanoslides setup
 nanoslides init MyProject
-nanoslides style create --base-prompt "Soft lighting, cinematic composition"
+nanoslides style create
 nanoslides style create studio-look --global --base-prompt "High-end studio product look"
 nanoslides generate "A minimalist title slide about AI safety" --model flash
 nanoslides export --format pptx
@@ -27,3 +27,11 @@ and foundational CLI commands, including NanoBanana-backed slide generation.
   with `--style-id` or by setting `style_id` in project `style.json`.
 - `nanoslides generate` automatically merges global + project style context and
   injects it into generation/edit prompts and reference inputs.
+
+## Guided CLI workflow
+
+- `nanoslides generate` now walks you through prompt/model/style/reference image
+  setup in an interactive flow by default.
+- `nanoslides style create` also guides style creation step by step.
+- Long image generation calls display a spinner/status indicator.
+- Default logging is quiet; use `-v` for verbose provider/network logs.
