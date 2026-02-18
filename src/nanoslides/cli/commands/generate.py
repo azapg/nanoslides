@@ -14,6 +14,7 @@ from nanoslides.core.project import (
     load_project_state,
     save_project_state,
 )
+from nanoslides.core.style import resolve_style_context
 from nanoslides.engines.nanobanana import NanoBananaModel, NanoBananaSlideEngine
 
 console = Console()
@@ -28,7 +29,11 @@ def generate_command(
         help="NanoBanana model selector.",
         case_sensitive=False,
     ),
-    style_id: str = typer.Option("default", "--style-id", help="Style preset ID."),
+    style_id: str = typer.Option(
+        "default",
+        "--style-id",
+        help="Global style preset ID override (falls back to project style.json).",
+    ),
     ref_image: Path | None = typer.Option(
         None,
         "--ref-image",
@@ -49,6 +54,7 @@ def generate_command(
     target_output_dir = output_dir or Path(config.default_output_dir)
     api_key = get_gemini_api_key(config)
     try:
+        resolved_style = resolve_style_context(style_id=style_id)
         engine = NanoBananaSlideEngine(
             model=model,
             api_key=api_key,
@@ -56,7 +62,7 @@ def generate_command(
         )
         result = engine.generate(
             prompt=prompt,
-            style_id=style_id,
+            style=resolved_style,
             ref_image=ref_image.read_bytes() if ref_image else None,
         )
     except ValueError as exc:
@@ -89,8 +95,10 @@ def _append_slide_to_project(
         return
 
     project = load_project_state()
+    next_order = max((slide.order for slide in project.slides), default=0) + 1
     project.slides.append(
         SlideEntry(
+            order=next_order,
             prompt=prompt,
             image_path=str(local_path) if local_path else None,
             metadata=metadata,
