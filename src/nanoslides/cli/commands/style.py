@@ -9,6 +9,7 @@ from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
+from nanoslides.core.config import get_gemini_api_key, load_global_config
 from nanoslides.core.style import (
     GLOBAL_STYLES_PATH,
     PROJECT_STYLE_PATH,
@@ -19,6 +20,7 @@ from nanoslides.core.style import (
     save_global_styles,
     save_project_style,
 )
+from nanoslides.core.style_steal import GeminiStyleStealAnalyzer, load_style_steal_source
 
 style_app = typer.Typer(
     help="Style management commands.",
@@ -396,7 +398,86 @@ def _parse_slides_base_reference_input(raw_value: str) -> list[str]:
 
 
 @style_app.command("steal")
-def style_steal_command() -> None:
-    """Placeholder command."""
-    console.print("[yellow]Coming Soon: style steal command.[/]")
+def style_steal_command(
+    source: Path = typer.Argument(
+        ...,
+        help="Source asset path for style extraction (image for now).",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+    ),
+    set_base_reference: bool = typer.Option(
+        False,
+        "--set-base-reference",
+        help="Force using the source as slides base reference in output style.json.",
+    ),
+    output: Path = typer.Option(
+        PROJECT_STYLE_PATH,
+        "--output",
+        help="Output style config path (defaults to ./style.json).",
+    ),
+) -> None:
+    """Extract a reusable project style from a source asset."""
+    config = load_global_config()
+    api_key = get_gemini_api_key(config)
+    if not api_key:
+        console.print(
+            "[bold red]Missing Gemini API key. Run `nanoslides setup` first.[/]"
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        source_asset = load_style_steal_source(source)
+        analyzer = GeminiStyleStealAnalyzer(api_key=api_key)
+        with console.status("[bold cyan]Analyzing style with Gemini 3 Pro...[/]"):
+            suggestion = analyzer.analyze(source_asset)
+    except ValueError as exc:
+        console.print(f"[bold red]{exc}[/]")
+        raise typer.Exit(code=1) from exc
+    except RuntimeError as exc:
+        console.print(f"[bold red]Style extraction failed: {exc}[/]")
+        raise typer.Exit(code=1) from exc
+
+    output_path = output.expanduser().resolve()
+    should_set_reference = set_base_reference or suggestion.use_as_base_reference
+    reference_images = (
+        [_style_reference_path_for_output(source_asset.path, output_path)]
+        if should_set_reference
+        else []
+    )
+
+    project_style = ProjectStyleConfig(
+        style_id=None,
+        base_prompt=suggestion.base_prompt,
+        negative_prompt=suggestion.negative_prompt,
+        reference_images=reference_images,
+        reference_comments=suggestion.reference_comments,
+    )
+    save_project_style(project_style, path=output_path)
+
+    recommendation = "yes" if suggestion.use_as_base_reference else "no"
+    if set_base_reference:
+        recommendation = f"{recommendation} (overridden to yes by --set-base-reference)"
+    console.print(
+        Panel.fit(
+            f"[bold green]Style extracted[/]\n"
+            f"Source: [bold]{source_asset.path}[/]\n"
+            f"Model: [bold]gemini-3-pro-preview[/]\n"
+            f"Recommended base reference: [bold]{recommendation}[/]\n"
+            f"Reason: {suggestion.base_reference_reason}\n"
+            f"Saved to [bold]{output_path}[/]",
+            title="nanoslides",
+            border_style="green",
+        )
+    )
+
+
+def _style_reference_path_for_output(source_path: Path, output_path: Path) -> str:
+    base_dir = output_path.parent.resolve()
+    resolved_source = source_path.resolve()
+    try:
+        return str(resolved_source.relative_to(base_dir))
+    except ValueError:
+        return str(resolved_source)
 

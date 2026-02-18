@@ -13,6 +13,8 @@ nanoslides init MyProject
 nanoslides styles create
 nanoslides styles create historic --global --slides-base-reference .\image.png
 nanoslides styles edit historic --slides-base-reference .\image.png
+nanoslides styles steal .\style-source.png
+nanoslides styles steal .\style-source.png --set-base-reference
 nanoslides styles
 nanoslides generate "A minimalist title slide about AI safety" --model flash
 nanoslides edit slide-abc123 "Translate all text to Spanish"
@@ -31,6 +33,9 @@ and foundational CLI commands, including NanoBanana-backed slide generation.
   with `--style-id` or by setting `style_id` in project `style.json`.
 - Use `--slides-base-reference` on `nanoslides styles create/edit` for images that
   are included in all slide generation/edit requests for visual consistency.
+- `nanoslides styles steal <image>` uses Gemini 3 Pro to infer a project `style.json`
+  and decides if the source should be a persistent base reference; use
+  `--set-base-reference` to force it on.
 - `nanoslides generate` automatically merges global + project style context and
   injects it into generation/edit prompts and reference inputs.
 
