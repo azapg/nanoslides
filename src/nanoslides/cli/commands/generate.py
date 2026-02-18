@@ -19,6 +19,7 @@ from nanoslides.core.project import (
     save_project_state,
 )
 from nanoslides.core.style import (
+    ResolvedStyle,
     load_global_styles,
     load_project_style,
     resolve_style_context,
@@ -57,6 +58,15 @@ def generate_command(
         dir_okay=False,
         readable=True,
     ),
+    references: list[Path] | None = typer.Option(
+        None,
+        "--references",
+        help="Additional reference image paths (repeat --references for multiple files).",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+    ),
     output_dir: Path | None = typer.Option(
         None,
         "--output-dir",
@@ -79,6 +89,7 @@ def generate_command(
     selected_model = model
     selected_style_id = style_id
     selected_ref_image = ref_image
+    selected_references = list(references or [])
     if not no_interactive and sys.stdin.isatty() and not selected_prompt:
         (
             selected_prompt,
@@ -104,6 +115,10 @@ def generate_command(
     try:
         with console.status("[bold cyan]Generating slide...[/]", spinner="dots"):
             resolved_style = resolve_style_context(style_id=effective_style_id)
+            merged_style = _merge_style_references(
+                resolved_style,
+                [*selected_references, *([selected_ref_image] if selected_ref_image else [])],
+            )
             engine = NanoBananaSlideEngine(
                 model=effective_model,
                 api_key=api_key,
@@ -111,8 +126,7 @@ def generate_command(
             )
             result = engine.generate(
                 prompt=selected_prompt,
-                style=resolved_style,
-                ref_image=selected_ref_image.read_bytes() if selected_ref_image else None,
+                style=merged_style,
                 aspect_ratio=aspect_ratio,
             )
     except ValueError as exc:
@@ -123,12 +137,14 @@ def generate_command(
         raise typer.Exit(code=1) from exc
 
     _append_slide_to_project(result.revised_prompt, result.local_path, result.metadata)
-    style_label = resolved_style.style_id or "project/default"
+    style_label = merged_style.style_id or "project/default"
+    references_count = len(merged_style.reference_images)
     console.print(
         Panel.fit(
             f"[bold green]Slide generated[/]\n"
             f"Model: [bold]{effective_model.value}[/]\n"
             f"Style: [bold]{style_label}[/]\n"
+            f"References: [bold]{references_count}[/]\n"
             f"Aspect ratio: [bold]{aspect_ratio.value}[/]\n"
             f"Saved to [bold]{result.local_path}[/]",
             title="nanoslides",
@@ -230,3 +246,31 @@ def _append_slide_to_project(
         )
     )
     save_project_state(project)
+
+
+def _merge_style_references(
+    style: ResolvedStyle,
+    references: list[Path],
+) -> ResolvedStyle:
+    if not references:
+        return style
+
+    merged_reference_images = _unique_strings(
+        [
+            *style.reference_images,
+            *(str(path.expanduser().resolve()) for path in references),
+        ]
+    )
+    return style.model_copy(update={"reference_images": merged_reference_images})
+
+
+def _unique_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for value in values:
+        normalized = value.strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(normalized)
+    return unique
