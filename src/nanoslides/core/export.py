@@ -12,6 +12,7 @@ from pptx.util import Emu
 
 _SUPPORTED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 _EMU_PER_PIXEL_AT_96_DPI = 9525
+_ASPECT_RATIO_TOLERANCE = 0.03
 
 
 class ExportFormat(str, Enum):
@@ -33,10 +34,12 @@ class PptxSlideDeckExporter:
     def export(self, slide_images: list[Path], output_path: Path) -> None:
         image_dimensions = [_load_image_dimensions(path) for path in slide_images]
         uniform_dimensions = _get_uniform_dimensions(image_dimensions)
+        consistent_aspect_dimensions = _get_consistent_aspect_dimensions(image_dimensions)
         presentation = Presentation()
         blank_layout = presentation.slide_layouts[6]
-        if uniform_dimensions is not None:
-            width_px, height_px = uniform_dimensions
+        slide_dimensions = uniform_dimensions or consistent_aspect_dimensions
+        if slide_dimensions is not None:
+            width_px, height_px = slide_dimensions
             presentation.slide_width = Emu(width_px * _EMU_PER_PIXEL_AT_96_DPI)
             presentation.slide_height = Emu(height_px * _EMU_PER_PIXEL_AT_96_DPI)
 
@@ -87,6 +90,25 @@ def _get_uniform_dimensions(
         if size != first:
             return None
     return first
+
+
+def _get_consistent_aspect_dimensions(
+    dimensions: list[tuple[int, int]],
+    *,
+    relative_tolerance: float = _ASPECT_RATIO_TOLERANCE,
+) -> tuple[int, int] | None:
+    first_width, first_height = dimensions[0]
+    if first_height == 0:
+        return None
+
+    first_ratio = first_width / first_height
+    for width, height in dimensions[1:]:
+        if height == 0:
+            return None
+        ratio = width / height
+        if abs(ratio - first_ratio) / first_ratio > relative_tolerance:
+            return None
+    return dimensions[0]
 
 
 def list_slide_images(slides_dir: Path) -> list[Path]:
