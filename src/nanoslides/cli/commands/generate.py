@@ -129,7 +129,7 @@ def generate_command(
         console.print(f"[bold red]Generation failed: {exc}[/]")
         raise typer.Exit(code=1) from exc
 
-    final_local_path = _append_slide_to_project(
+    final_local_path, slide_id = _append_slide_to_project(
         result.revised_prompt,
         result.local_path,
         result.metadata,
@@ -142,10 +142,10 @@ def generate_command(
     console.print(
         Panel.fit(
             f"[bold green]Slide generated[/]\n"
+            f"Slide ID: [bold]{slide_id or 'untracked'}[/]\n"
             f"Model: [bold]{effective_model.value}[/]\n"
             f"Style: [bold]{style_label}[/]\n"
             f"References: [bold]{references_count}[/]\n"
-            f"Aspect ratio: [bold]{aspect_ratio.value}[/]\n"
             f"Saved to [bold]{result.local_path}[/]",
             title="nanoslides",
             border_style="green",
@@ -237,9 +237,9 @@ def _append_slide_to_project(
     prompt: str,
     local_path: Path | None,
     metadata: dict[str, object],
-) -> Path | None:
+) -> tuple[Path | None, str | None]:
     if not PROJECT_STATE_FILE.exists():
-        return local_path
+        return local_path, None
 
     project = load_project_state()
     next_order = max((slide.order for slide in project.slides), default=0) + 1
@@ -256,7 +256,7 @@ def _append_slide_to_project(
         )
     )
     save_project_state(project)
-    return renamed_path
+    return renamed_path, slide_id
 
 
 def _resolve_cli_references(
