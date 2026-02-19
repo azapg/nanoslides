@@ -12,6 +12,11 @@ from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 
 from nanoslides.cli.image_store import persist_slide_result
+from nanoslides.cli.reference_files import (
+    add_reference_file_metadata,
+    inject_reference_file_context,
+    resolve_reference_files,
+)
 from nanoslides.core.config import GlobalConfig, get_gemini_api_key, load_global_config
 from nanoslides.core.presentation import Presentation
 from nanoslides.core.project import (
@@ -53,6 +58,15 @@ def edit_command(
         dir_okay=False,
         readable=True,
     ),
+    reference_file: list[Path] | None = typer.Option(
+        None,
+        "--reference-file",
+        help="Text file path used as context (repeat --reference-file for multiple files).",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+    ),
     output_dir: Path | None = typer.Option(
         None,
         "--output-dir",
@@ -72,6 +86,7 @@ def edit_command(
     effective_model = model or NanoBananaModel.PRO
     effective_style_id = style_id or "default"
     selected_references = list(references or [])
+    selected_reference_files = resolve_reference_files(reference_file)
     presentation: Presentation | None = None
     slide_entry: SlideEntry | None = None
     draft_entry: SlideEntry | None = None
@@ -86,6 +101,10 @@ def edit_command(
             api_key=api_key,
         )
         while True:
+            contextual_instruction = inject_reference_file_context(
+                current_instruction,
+                selected_reference_files,
+            )
             results = []
             for index in range(variations):
                 status_message = (
@@ -97,13 +116,17 @@ def edit_command(
                     results.append(
                         engine.edit(
                             image=source_image_path.read_bytes(),
-                            instruction=current_instruction,
+                            instruction=contextual_instruction,
                             style=merged_style,
                         )
                     )
 
             selected_index = _select_variation_index(count=len(results))
             selected_result = results[selected_index]
+            selected_metadata = add_reference_file_metadata(
+                selected_result.metadata,
+                selected_reference_files,
+            )
             persisted_path = persist_slide_result(
                 selected_result,
                 output_dir=target_output_dir,
@@ -115,7 +138,7 @@ def edit_command(
                 source_image_path=source_image_path,
                 instruction=current_instruction,
                 edited_image_path=persisted_path,
-                metadata=selected_result.metadata,
+                metadata=selected_metadata,
             )
 
             style_label = merged_style.style_id or "project/default"
@@ -130,6 +153,7 @@ def edit_command(
                         f"Model: [bold]{effective_model.value}[/]\n"
                         f"Style: [bold]{style_label}[/]\n"
                         f"References: [bold]{references_count}[/]\n"
+                        f"Reference files: [bold]{len(selected_reference_files)}[/]\n"
                         f"Variation: [bold]{selected_index + 1}/{len(results)}[/]\n"
                         f"Saved to [bold]{persisted_path}[/]\n"
                         f"Status: [bold]Needs review before applying[/]",
@@ -163,6 +187,7 @@ def edit_command(
                     f"Model: [bold]{effective_model.value}[/]\n"
                     f"Style: [bold]{style_label}[/]\n"
                     f"References: [bold]{references_count}[/]\n"
+                    f"Reference files: [bold]{len(selected_reference_files)}[/]\n"
                     f"Variation: [bold]{selected_index + 1}/{len(results)}[/]\n"
                     f"Saved to [bold]{persisted_path}[/]",
                     title="nanoslides",

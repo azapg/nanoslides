@@ -12,6 +12,11 @@ from rich.prompt import Prompt
 from rich.table import Table
 
 from nanoslides.cli.image_store import persist_slide_result
+from nanoslides.cli.reference_files import (
+    add_reference_file_metadata,
+    inject_reference_file_context,
+    resolve_reference_files,
+)
 from nanoslides.core.config import GlobalConfig, get_gemini_api_key, load_global_config
 from nanoslides.core.presentation import Presentation
 from nanoslides.core.project import (
@@ -59,6 +64,15 @@ def generate_command(
         dir_okay=False,
         readable=True,
     ),
+    reference_file: list[Path] | None = typer.Option(
+        None,
+        "--reference-file",
+        help="Text file path used as context (repeat --reference-file for multiple files).",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+    ),
     output_dir: Path | None = typer.Option(
         None,
         "--output-dir",
@@ -86,6 +100,7 @@ def generate_command(
     selected_prompt = prompt
     selected_model = model
     selected_style_id = style_id
+    selected_reference_files = resolve_reference_files(reference_file)
     try:
         selected_references = _resolve_cli_references(references, ctx.args)
     except ValueError as exc:
@@ -114,6 +129,10 @@ def generate_command(
     effective_model = selected_model or NanoBananaModel.PRO
     effective_style_id = selected_style_id or "default"
     try:
+        contextual_prompt = inject_reference_file_context(
+            selected_prompt,
+            selected_reference_files,
+        )
         resolved_style = resolve_style_context(style_id=effective_style_id)
         merged_style = merge_style_references(resolved_style, selected_references)
         engine = NanoBananaSlideEngine(
@@ -130,7 +149,7 @@ def generate_command(
             with console.status(status_message, spinner="dots"):
                 results.append(
                     engine.generate(
-                        prompt=selected_prompt,
+                        prompt=contextual_prompt,
                         style=merged_style,
                         aspect_ratio=aspect_ratio,
                     )
@@ -147,11 +166,15 @@ def generate_command(
         no_interactive=no_interactive,
     )
     selected_result = results[selected_index]
+    selected_metadata = add_reference_file_metadata(
+        selected_result.metadata,
+        selected_reference_files,
+    )
     persisted_path = persist_slide_result(selected_result, output_dir=target_output_dir)
     final_local_path, slide_id = _append_slide_to_project(
         selected_result.revised_prompt,
         persisted_path,
-        selected_result.metadata,
+        selected_metadata,
     )
     saved_path = final_local_path or persisted_path
     style_label = merged_style.style_id or "project/default"
@@ -163,6 +186,7 @@ def generate_command(
             f"Model: [bold]{effective_model.value}[/]\n"
             f"Style: [bold]{style_label}[/]\n"
             f"References: [bold]{references_count}[/]\n"
+            f"Reference files: [bold]{len(selected_reference_files)}[/]\n"
             f"Variation: [bold]{selected_index + 1}/{len(results)}[/]\n"
             f"Saved to [bold]{saved_path}[/]",
             title="nanoslides",
