@@ -74,6 +74,7 @@ nanoslides generate "Introduction to AI in healthcare"
 - `nanoslides styles steal ./image.png`: Automatically infer style parameters from an existing image using Gemini Vision.
 - `nanoslides styles generate "clean Swiss-style layouts with muted blue accents" --reference-image ./brand.png`: Preview a generated style, then choose whether to save it to project `style.json` or globally.
 - `nanoslides edit <slide-id> "Make the colors warmer"`: Iterate on a specific slide while maintaining its context.
+- `nanoslides presentation "Launch plan for Product X" --duration-minutes 20 --illustration-level high`: Plan and generate a full deck from one prompt with Gemini 3 Pro orchestration.
 - `nanoslides export --format pptx`: Compile your generated images into a PowerPoint file.
 
 ## Project Structure
