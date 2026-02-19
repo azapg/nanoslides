@@ -19,6 +19,11 @@ from rich.prompt import Prompt
 from rich.table import Table
 
 from nanoslides.cli.image_store import persist_slide_result
+from nanoslides.cli.reference_files import (
+    add_reference_file_metadata,
+    inject_reference_file_context,
+    resolve_reference_files,
+)
 from nanoslides.core.config import GlobalConfig, get_gemini_api_key, load_global_config
 from nanoslides.core.presentation import Presentation
 from nanoslides.core.provider_errors import is_service_unavailable_error
@@ -86,6 +91,7 @@ class PresentationRequest:
     language: str
     style_id: str | None
     references: list[Path]
+    reference_files: list[Path]
 
 
 def presentation_command(
@@ -104,6 +110,15 @@ def presentation_command(
         None,
         "--references",
         help="Reference image paths (repeat --references for multiple files).",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+    ),
+    reference_file: list[Path] | None = typer.Option(
+        None,
+        "--reference-file",
+        help="Text file path used as context (repeat --reference-file for multiple files).",
         exists=True,
         file_okay=True,
         dir_okay=False,
@@ -185,6 +200,7 @@ def presentation_command(
             language=language.strip() or "en",
             style_id=style_id,
             references=list(references or []),
+            reference_files=resolve_reference_files(reference_file),
         )
         if not no_interactive and sys.stdin.isatty() and not request.prompt:
             request = _collect_interactive_inputs(request)
@@ -236,6 +252,7 @@ def presentation_command(
             api_key=api_key,
             aspect_ratio=aspect_ratio,
             output_dir=target_output_dir,
+            reference_files=request.reference_files,
         )
     except (ValueError, RuntimeError) as exc:
         console.print(f"[bold red]Presentation generation failed: {exc}[/]")
@@ -262,6 +279,7 @@ def presentation_command(
             f"Slides: [bold]{len(generated_rows)}[/]\n"
             f"Planner: [bold]{planner_model}[/]\n"
             f"Generator model: [bold]{effective_model.value}[/]\n"
+            f"Reference files: [bold]{len(request.reference_files)}[/]\n"
             f"Output dir: [bold]{target_output_dir.resolve()}[/]",
             title="nanoslides",
             border_style="green",
@@ -313,7 +331,15 @@ def _collect_interactive_inputs(request: PresentationRequest) -> PresentationReq
         "10) Reference image paths (optional, comma-separated)",
         default=refs_default,
     ).strip()
-    references = _parse_reference_paths(raw_refs)
+    references = _parse_reference_paths(raw_refs, item_label="Reference image")
+    raw_reference_files = Prompt.ask(
+        "11) Reference text file paths (optional, comma-separated)",
+        default=", ".join(str(path) for path in request.reference_files),
+    ).strip()
+    reference_files = _parse_reference_paths(
+        raw_reference_files,
+        item_label="Reference file",
+    )
 
     return PresentationRequest(
         prompt=prompt.strip(),
@@ -326,6 +352,7 @@ def _collect_interactive_inputs(request: PresentationRequest) -> PresentationReq
         language=language,
         style_id=style_id,
         references=references,
+        reference_files=resolve_reference_files(reference_files),
     )
 
 
@@ -350,7 +377,7 @@ def _prompt_optional_int(label: str, default: int | None, *, minimum: int) -> in
         return parsed
 
 
-def _parse_reference_paths(raw_paths: str) -> list[Path]:
+def _parse_reference_paths(raw_paths: str, *, item_label: str) -> list[Path]:
     if not raw_paths.strip():
         return []
     references: list[Path] = []
@@ -358,7 +385,7 @@ def _parse_reference_paths(raw_paths: str) -> list[Path]:
     for token in raw_paths.split(","):
         path = Path(token.strip()).expanduser().resolve()
         if not path.exists() or not path.is_file():
-            raise ValueError(f"Reference image not found: {path}")
+            raise ValueError(f"{item_label} not found: {path}")
         normalized = str(path)
         if normalized in seen:
             continue
@@ -392,6 +419,7 @@ def _plan_presentation(
         style=style,
         has_existing_style=has_existing_style,
     )
+    prompt = inject_reference_file_context(prompt, request.reference_files)
     contents: list[Any] = [prompt]
     contents.extend(_planner_reference_parts(style.reference_images))
     planner_models = [_PLANNER_PRIMARY_MODEL, _PLANNER_FALLBACK_MODEL]
@@ -460,6 +488,7 @@ def _build_planner_prompt(
         f"Detail level: {request.detail_level}\n"
         f"Illustration level: {request.illustration_level}\n"
         f"Language: {request.language}\n"
+        f"Reference files count: {len(request.reference_files)}\n"
         f"Existing style context:\n{style_context}\n"
         "Rules:\n"
         "1) Keep slide sequence coherent and presentation-ready.\n"
@@ -587,6 +616,7 @@ def _generate_planned_slides(
     api_key: str,
     aspect_ratio: ImageAspectRatio,
     output_dir: Path,
+    reference_files: list[Path],
 ) -> list[dict[str, object]]:
     engine = NanoBananaSlideEngine(model=model, api_key=api_key)
     presentation: Presentation | None = None
@@ -614,12 +644,15 @@ def _generate_planned_slides(
             entry = presentation.add_slide(
                 prompt=result.revised_prompt,
                 image_path=None,
-                metadata={
-                    **result.metadata,
-                    "deck_title": plan.deck_title,
-                    "deck_slide_index": index,
-                    "deck_slide_title": slide.title,
-                },
+                metadata=add_reference_file_metadata(
+                    {
+                        **result.metadata,
+                        "deck_title": plan.deck_title,
+                        "deck_slide_index": index,
+                        "deck_slide_title": slide.title,
+                    },
+                    reference_files,
+                ),
             )
             renamed_path = _rename_slide_file(persisted_path, entry.order, entry.id)
             entry.image_path = str(renamed_path) if renamed_path else None
