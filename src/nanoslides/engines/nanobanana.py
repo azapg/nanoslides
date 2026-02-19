@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-from datetime import datetime, timezone
 from enum import Enum
 import os
 from pathlib import Path
@@ -56,11 +55,10 @@ class NanoBananaSlideEngine(SlideEngine):
         *,
         model: NanoBananaModel = NanoBananaModel.FLASH,
         api_key: str | None = None,
-        output_dir: Path | str = "./slides",
+        output_dir: Path | str | None = None,
     ) -> None:
         self.model = model
         self._api_model = model.api_model
-        self._output_dir = Path(output_dir)
         self._client = genai.Client(api_key=_resolve_api_key(api_key))
 
     def generate(
@@ -135,7 +133,6 @@ class NanoBananaSlideEngine(SlideEngine):
         if image_bytes is None:
             raise RuntimeError("NanoBanana returned no image in the response.")
 
-        local_path = self._persist_image(image_bytes, image_mime_type)
         metadata: dict[str, Any] = {
             "engine": "nanobanana",
             "model_selector": self.model.value,
@@ -148,21 +145,11 @@ class NanoBananaSlideEngine(SlideEngine):
             metadata["response_text"] = "\n".join(text_parts)
 
         return SlideResult(
-            image_url=local_path.resolve().as_uri(),
-            local_path=local_path,
+            image_bytes=image_bytes,
+            mime_type=image_mime_type,
             revised_prompt=revised_prompt,
             metadata=metadata,
         )
-
-    def _persist_image(self, image_bytes: bytes, mime_type: str) -> Path:
-        extension = _file_extension_for_mime_type(mime_type)
-        self._output_dir.mkdir(parents=True, exist_ok=True)
-        file_name = (
-            f"slide-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}.{extension}"
-        )
-        local_path = self._output_dir / file_name
-        local_path.write_bytes(image_bytes)
-        return local_path
 
 
 def _resolve_api_key(api_key: str | None) -> str:

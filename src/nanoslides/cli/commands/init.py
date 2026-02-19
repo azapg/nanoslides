@@ -9,7 +9,8 @@ import typer
 from rich.console import Console
 
 from nanoslides.core.config import GlobalConfig, load_global_config
-from nanoslides.core.project import PROJECT_STATE_FILE, ProjectState, save_project_state
+from nanoslides.core.presentation import Presentation
+from nanoslides.core.project import PROJECT_STATE_FILE, save_project_state
 
 console = Console()
 
@@ -37,13 +38,13 @@ def init_command(
         raise typer.Exit(code=1)
 
     config = _resolve_config(ctx)
-    state = ProjectState(
+    presentation = Presentation(
         name=project_name,
         created_at=datetime.now(timezone.utc),
         engine=config.default_engine,
         slides=[],
     )
-    save_project_state(state, project_state_path)
+    save_project_state(presentation.to_project_state(), project_state_path)
 
     console.print(
         f"[bold green]Initialized slides project '{project_name}' at "

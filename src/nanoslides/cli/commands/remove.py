@@ -8,6 +8,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from nanoslides.core.presentation import Presentation
 from nanoslides.core.project import PROJECT_STATE_FILE, SlideEntry, load_project_state, save_project_state
 
 console = Console()
@@ -18,22 +19,21 @@ def remove_command(
 ) -> None:
     """Remove a slide from the local project state."""
     try:
-        project = load_project_state()
+        presentation = Presentation.from_project_state(load_project_state())
     except FileNotFoundError as exc:
         console.print(
             f"[bold red]{PROJECT_STATE_FILE} not found. Run `nanoslides init` first.[/]"
         )
         raise typer.Exit(code=1) from exc
 
-    ordered_slides = sorted(project.slides, key=lambda slide: (slide.order, slide.id))
+    ordered_slides = presentation.ordered_main_slides
     target_slide = next((slide for slide in ordered_slides if slide.id == slide_id), None)
     if target_slide is None:
         console.print(f"[bold red]Slide '{slide_id}' was not found in {PROJECT_STATE_FILE}.[/]")
         raise typer.Exit(code=1)
 
-    project.slides = [slide for slide in ordered_slides if slide.id != slide_id]
-    _reindex_slide_orders(project.slides)
-    save_project_state(project)
+    presentation.remove_slide(slide_id)
+    save_project_state(presentation.to_project_state())
 
     console.print(
         Panel.fit(
@@ -44,12 +44,7 @@ def remove_command(
             border_style="green",
         )
     )
-    console.print(_slides_table(project.slides))
-
-
-def _reindex_slide_orders(slides: list[SlideEntry]) -> None:
-    for index, slide in enumerate(slides, start=1):
-        slide.order = index
+    console.print(_slides_table(presentation.ordered_main_slides))
 
 
 def _slides_table(slides: list[SlideEntry]) -> Table:

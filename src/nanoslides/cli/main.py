@@ -18,10 +18,10 @@ from nanoslides.cli.commands.remove import remove_command
 from nanoslides.cli.commands.setup import setup_command
 from nanoslides.cli.commands.style import style_app
 from nanoslides.core.config import load_global_config
+from nanoslides.core.presentation import Presentation
 from nanoslides.core.project import (
     LEGACY_PROJECT_STATE_FILE,
     PROJECT_STATE_FILE,
-    ProjectState,
     load_project_state,
 )
 from nanoslides.core.style import resolve_style_context
@@ -55,8 +55,8 @@ def main(
         console.print(ctx.get_help())
         raise typer.Exit()
 
-    project = load_project_state()
-    _render_project_summary(project)
+    presentation = Presentation.from_project_state(load_project_state())
+    _render_project_summary(presentation)
     console.print("[dim]Use [bold]nanoslides --help[/] for help.[/]")
     raise typer.Exit()
 
@@ -75,7 +75,7 @@ def _has_local_project() -> bool:
     return PROJECT_STATE_FILE.exists() or LEGACY_PROJECT_STATE_FILE.exists()
 
 
-def _render_project_summary(project: ProjectState) -> None:
+def _render_project_summary(presentation: Presentation) -> None:
     project_path = (
         PROJECT_STATE_FILE.resolve()
         if PROJECT_STATE_FILE.exists()
@@ -84,8 +84,8 @@ def _render_project_summary(project: ProjectState) -> None:
     details = Table.grid(padding=(0, 1))
     details.add_column(style="bold cyan")
     details.add_column()
-    details.add_row("Name", project.name)
-    details.add_row("Engine", project.engine)
+    details.add_row("Name", presentation.name)
+    details.add_row("Engine", presentation.engine)
     details.add_row("Path", str(project_path))
     console.print(Panel(details, title="Current project", border_style="cyan", box=box.ROUNDED))
 
@@ -93,9 +93,9 @@ def _render_project_summary(project: ProjectState) -> None:
     slides_table.add_column("Order", justify="right")
     slides_table.add_column("ID")
     slides_table.add_column("Path")
-    for slide in sorted(project.slides, key=lambda item: (item.order, item.id)):
+    for slide in presentation.ordered_main_slides:
         slides_table.add_row(str(slide.order), slide.id, slide.image_path or "-")
-    if not project.slides:
+    if not presentation.ordered_main_slides:
         slides_table.add_row("-", "[dim](no slides yet)[/]", "-")
     console.print(slides_table)
 

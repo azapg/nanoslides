@@ -11,14 +11,13 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
 
+from nanoslides.cli.image_store import persist_slide_result
 from nanoslides.core.config import GlobalConfig, get_gemini_api_key, load_global_config
+from nanoslides.core.presentation import Presentation
 from nanoslides.core.project import (
     PROJECT_STATE_FILE,
-    SlideEntry,
-    dedupe_slide_id,
     load_project_state,
     save_project_state,
-    suggest_slide_id,
 )
 from nanoslides.core.style import (
     load_global_styles,
@@ -115,7 +114,6 @@ def generate_command(
             engine = NanoBananaSlideEngine(
                 model=effective_model,
                 api_key=api_key,
-                output_dir=target_output_dir,
             )
             result = engine.generate(
                 prompt=selected_prompt,
@@ -129,14 +127,13 @@ def generate_command(
         console.print(f"[bold red]Generation failed: {exc}[/]")
         raise typer.Exit(code=1) from exc
 
+    persisted_path = persist_slide_result(result, output_dir=target_output_dir)
     final_local_path, slide_id = _append_slide_to_project(
         result.revised_prompt,
-        result.local_path,
+        persisted_path,
         result.metadata,
     )
-    if final_local_path is not None:
-        result.local_path = final_local_path
-        result.image_url = final_local_path.resolve().as_uri()
+    saved_path = final_local_path or persisted_path
     style_label = merged_style.style_id or "project/default"
     references_count = len(merged_style.reference_images)
     console.print(
@@ -146,7 +143,7 @@ def generate_command(
             f"Model: [bold]{effective_model.value}[/]\n"
             f"Style: [bold]{style_label}[/]\n"
             f"References: [bold]{references_count}[/]\n"
-            f"Saved to [bold]{result.local_path}[/]",
+            f"Saved to [bold]{saved_path}[/]",
             title="nanoslides",
             border_style="green",
         )
@@ -241,22 +238,16 @@ def _append_slide_to_project(
     if not PROJECT_STATE_FILE.exists():
         return local_path, None
 
-    project = load_project_state()
-    next_order = max((slide.order for slide in project.slides), default=0) + 1
-    existing_ids = {slide.id for slide in project.slides}
-    slide_id = dedupe_slide_id(suggest_slide_id(prompt), existing_ids)
-    renamed_path = _rename_slide_file(local_path, next_order, slide_id)
-    project.slides.append(
-        SlideEntry(
-            id=slide_id,
-            order=next_order,
-            prompt=prompt,
-            image_path=str(renamed_path) if renamed_path else None,
-            metadata=metadata,
-        )
+    presentation = Presentation.from_project_state(load_project_state())
+    slide_entry = presentation.add_slide(
+        prompt=prompt,
+        image_path=None,
+        metadata=metadata,
     )
-    save_project_state(project)
-    return renamed_path, slide_id
+    renamed_path = _rename_slide_file(local_path, slide_entry.order, slide_entry.id)
+    slide_entry.image_path = str(renamed_path) if renamed_path else None
+    save_project_state(presentation.to_project_state())
+    return renamed_path, slide_entry.id
 
 
 def _resolve_cli_references(

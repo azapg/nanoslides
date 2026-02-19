@@ -11,12 +11,12 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 
+from nanoslides.cli.image_store import persist_slide_result
 from nanoslides.core.config import GlobalConfig, get_gemini_api_key, load_global_config
+from nanoslides.core.presentation import Presentation
 from nanoslides.core.project import (
     PROJECT_STATE_FILE,
-    ProjectState,
     SlideEntry,
-    dedupe_slide_id,
     load_project_state,
     save_project_state,
 )
@@ -66,19 +66,18 @@ def edit_command(
     effective_model = model or NanoBananaModel.PRO
     effective_style_id = style_id or "default"
     selected_references = list(references or [])
-    project_state: ProjectState | None = None
+    presentation: Presentation | None = None
     slide_entry: SlideEntry | None = None
     draft_entry: SlideEntry | None = None
     current_instruction = instruction
 
     try:
-        source_image_path, project_state, slide_entry = _resolve_edit_target(target)
+        source_image_path, presentation, slide_entry = _resolve_edit_target(target)
         resolved_style = resolve_style_context(style_id=effective_style_id)
         merged_style = merge_style_references(resolved_style, selected_references)
         engine = NanoBananaSlideEngine(
             model=effective_model,
             api_key=api_key,
-            output_dir=target_output_dir,
         )
         while True:
             with console.status("[bold cyan]Editing slide...[/]", spinner="dots"):
@@ -87,19 +86,24 @@ def edit_command(
                     instruction=current_instruction,
                     style=merged_style,
                 )
+                persisted_path = persist_slide_result(
+                    result,
+                    output_dir=target_output_dir,
+                    file_prefix="slide-edit",
+                )
                 draft_entry = _create_edit_draft(
-                    project_state=project_state,
+                    presentation=presentation,
                     slide_entry=slide_entry,
                     source_image_path=source_image_path,
                     instruction=current_instruction,
-                    edited_image_path=result.local_path,
+                    edited_image_path=persisted_path,
                     metadata=result.metadata,
                 )
 
             style_label = merged_style.style_id or "project/default"
             references_count = len(merged_style.reference_images)
             source_label = slide_entry.id if slide_entry else str(source_image_path)
-            if draft_entry is not None and slide_entry is not None and project_state is not None:
+            if draft_entry is not None and slide_entry is not None and presentation is not None:
                 console.print(
                     Panel.fit(
                         f"[bold yellow]Draft slide saved[/]\n"
@@ -108,7 +112,7 @@ def edit_command(
                         f"Model: [bold]{effective_model.value}[/]\n"
                         f"Style: [bold]{style_label}[/]\n"
                         f"References: [bold]{references_count}[/]\n"
-                        f"Saved to [bold]{result.local_path}[/]\n"
+                        f"Saved to [bold]{persisted_path}[/]\n"
                         f"Status: [bold]Needs review before applying[/]",
                         title="nanoslides",
                         border_style="yellow",
@@ -116,7 +120,7 @@ def edit_command(
                 )
                 if _should_apply_draft(slide_entry.id, draft_entry.id):
                     _apply_draft_to_slide(
-                        project_state=project_state,
+                        presentation=presentation,
                         slide_entry=slide_entry,
                         draft_entry=draft_entry,
                     )
@@ -140,7 +144,7 @@ def edit_command(
                     f"Model: [bold]{effective_model.value}[/]\n"
                     f"Style: [bold]{style_label}[/]\n"
                     f"References: [bold]{references_count}[/]\n"
-                    f"Saved to [bold]{result.local_path}[/]",
+                    f"Saved to [bold]{persisted_path}[/]",
                     title="nanoslides",
                     border_style="green",
                 )
@@ -154,18 +158,22 @@ def edit_command(
         raise typer.Exit(code=1) from exc
 
 
-def _resolve_edit_target(target: str) -> tuple[Path, ProjectState | None, SlideEntry | None]:
+def _resolve_edit_target(target: str) -> tuple[Path, Presentation | None, SlideEntry | None]:
     target_path = Path(target).expanduser()
-    project_state = load_project_state() if PROJECT_STATE_FILE.exists() else None
+    presentation = (
+        Presentation.from_project_state(load_project_state())
+        if PROJECT_STATE_FILE.exists()
+        else None
+    )
 
     if target_path.exists():
         if not target_path.is_file():
             raise ValueError(f"Edit target is not a file: {target_path}")
         resolved_target = target_path.resolve()
-        matched_slide = _find_slide_by_path(project_state, resolved_target)
-        return resolved_target, project_state, matched_slide
+        matched_slide = _find_slide_by_path(presentation, resolved_target)
+        return resolved_target, presentation, matched_slide
 
-    matched_slide = _find_slide_by_id(project_state, target)
+    matched_slide = _find_slide_by_id(presentation, target)
     if matched_slide is None:
         raise ValueError(
             f"Slide target '{target}' was not found. Use a slide ID from {PROJECT_STATE_FILE} "
@@ -177,29 +185,29 @@ def _resolve_edit_target(target: str) -> tuple[Path, ProjectState | None, SlideE
     resolved_target = _resolve_slide_image_path(matched_slide.image_path)
     if not resolved_target.exists() or not resolved_target.is_file():
         raise ValueError(f"Slide image not found: {resolved_target}")
-    return resolved_target, project_state, matched_slide
+    return resolved_target, presentation, matched_slide
 
 
 def _find_slide_by_id(
-    project_state: ProjectState | None,
+    presentation: Presentation | None,
     target_id: str,
 ) -> SlideEntry | None:
-    if project_state is None:
+    if presentation is None:
         return None
-    for slide in project_state.slides:
+    for slide in presentation.slides:
         if slide.id == target_id:
             return slide
     return None
 
 
 def _find_slide_by_path(
-    project_state: ProjectState | None,
+    presentation: Presentation | None,
     image_path: Path,
 ) -> SlideEntry | None:
-    if project_state is None:
+    if presentation is None:
         return None
     normalized_target = _normalize_path(image_path)
-    for slide in project_state.slides:
+    for slide in presentation.slides:
         if not slide.image_path:
             continue
         if _normalize_path(_resolve_slide_image_path(slide.image_path)) == normalized_target:
@@ -220,21 +228,18 @@ def _normalize_path(path: Path) -> str:
 
 def _create_edit_draft(
     *,
-    project_state: ProjectState | None,
+    presentation: Presentation | None,
     slide_entry: SlideEntry | None,
     source_image_path: Path,
     instruction: str,
     edited_image_path: Path | None,
     metadata: dict[str, object],
 ) -> SlideEntry | None:
-    if project_state is None or slide_entry is None or edited_image_path is None:
+    if presentation is None or slide_entry is None or edited_image_path is None:
         return None
 
-    existing_ids = {slide.id for slide in project_state.slides}
-    draft_id = dedupe_slide_id(f"{slide_entry.id}-draft", existing_ids)
-    draft_entry = SlideEntry(
-        id=draft_id,
-        order=slide_entry.order,
+    draft_entry = presentation.create_draft(
+        source_slide_id=slide_entry.id,
         prompt=instruction,
         image_path=str(edited_image_path),
         metadata={
@@ -242,33 +247,24 @@ def _create_edit_draft(
             "review_status": "pending",
             "edited_from": str(source_image_path),
         },
-        is_draft=True,
-        draft_of=slide_entry.id,
     )
-    project_state.slides.append(draft_entry)
-    save_project_state(project_state)
+    save_project_state(presentation.to_project_state())
     return draft_entry
 
 
 def _apply_draft_to_slide(
     *,
-    project_state: ProjectState,
+    presentation: Presentation,
     slide_entry: SlideEntry,
     draft_entry: SlideEntry,
 ) -> None:
-    applied_metadata = {
-        **draft_entry.metadata,
-    }
-    applied_metadata.pop("review_status", None)
-    slide_entry.prompt = draft_entry.prompt
-    slide_entry.image_path = draft_entry.image_path
-    slide_entry.metadata = applied_metadata
-    slide_entry.is_draft = False
-    slide_entry.draft_of = None
-    project_state.slides = [
-        slide for slide in project_state.slides if slide.id != draft_entry.id
-    ]
-    save_project_state(project_state)
+    source_slide, _ = presentation.apply_draft(draft_entry.id)
+    slide_entry.prompt = source_slide.prompt
+    slide_entry.image_path = source_slide.image_path
+    slide_entry.metadata = source_slide.metadata
+    slide_entry.is_draft = source_slide.is_draft
+    slide_entry.draft_of = source_slide.draft_of
+    save_project_state(presentation.to_project_state())
 
 
 def _should_apply_draft(source_slide_id: str, draft_id: str) -> bool:
