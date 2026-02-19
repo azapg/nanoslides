@@ -9,8 +9,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+import httpx
 from google import genai
 from google.genai import types
+
+from nanoslides.core.style import ProjectStyleConfig
 
 
 class StyleStealSourceKind(str, Enum):
@@ -40,6 +43,15 @@ class StyleStealSuggestion:
     base_reference_reason: str
 
 
+@dataclass(frozen=True)
+class InferredProjectStyle:
+    """In-memory style inference output that callers may choose to persist."""
+
+    project_style: ProjectStyleConfig
+    suggestion: StyleStealSuggestion
+    reference_sources: list[StyleStealSource]
+
+
 class GeminiStyleStealAnalyzer:
     """Analyze a source asset and infer reusable slide style instructions."""
 
@@ -59,17 +71,50 @@ class GeminiStyleStealAnalyzer:
         if source.kind != StyleStealSourceKind.IMAGE:
             raise ValueError(f"Unsupported style-steal source kind: {source.kind}")
 
-        response = self._client.models.generate_content(
-            model="gemini-3-pro-preview",
+        return self._analyze_contents(
             contents=[
                 _STYLE_STEAL_PROMPT,
                 types.Part.from_bytes(data=source.bytes_data, mime_type=source.mime_type),
             ],
-            config=types.GenerateContentConfig(
-                temperature=1.0,
-                response_mime_type="application/json",
-            ),
         )
+
+    def analyze_instruction(
+        self,
+        *,
+        instruction: str,
+        reference_sources: list[StyleStealSource] | None = None,
+    ) -> StyleStealSuggestion:
+        cleaned_instruction = instruction.strip()
+        if not cleaned_instruction:
+            raise ValueError("Instruction cannot be empty.")
+
+        contents: list[Any] = [
+            _STYLE_GENERATE_PROMPT,
+            f"Style instruction:\n{cleaned_instruction}",
+        ]
+        for source in reference_sources or []:
+            if source.kind != StyleStealSourceKind.IMAGE:
+                raise ValueError(f"Unsupported style-steal source kind: {source.kind}")
+            contents.append(
+                types.Part.from_bytes(data=source.bytes_data, mime_type=source.mime_type)
+            )
+
+        return self._analyze_contents(contents=contents)
+
+    def _analyze_contents(self, *, contents: list[Any]) -> StyleStealSuggestion:
+        try:
+            response = self._client.models.generate_content(
+                model="gemini-3-pro-preview",
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    temperature=1.0,
+                    response_mime_type="application/json",
+                ),
+            )
+        except httpx.TimeoutException as exc:
+            raise RuntimeError(
+                "Style analysis timed out. Retry with a higher --timeout-seconds value."
+            ) from exc
         payload = _parse_json_response(response)
 
         base_prompt = str(payload.get("base_prompt", "")).strip()
@@ -92,6 +137,63 @@ class GeminiStyleStealAnalyzer:
             use_as_base_reference=use_as_base_reference,
             base_reference_reason=base_reference_reason,
         )
+
+
+def infer_project_style_from_source(
+    *,
+    analyzer: GeminiStyleStealAnalyzer,
+    source: StyleStealSource,
+    set_base_reference: bool = False,
+) -> InferredProjectStyle:
+    """Infer an in-memory project style from a single source asset."""
+    suggestion = analyzer.analyze(source)
+    should_set_reference = set_base_reference or suggestion.use_as_base_reference
+    project_style = ProjectStyleConfig(
+        style_id=None,
+        base_prompt=suggestion.base_prompt,
+        negative_prompt=suggestion.negative_prompt,
+        reference_images=[str(source.path)] if should_set_reference else [],
+        reference_comments=suggestion.reference_comments,
+    )
+    return InferredProjectStyle(
+        project_style=project_style,
+        suggestion=suggestion,
+        reference_sources=[source],
+    )
+
+
+def infer_project_style_from_instruction(
+    *,
+    analyzer: GeminiStyleStealAnalyzer,
+    instruction: str,
+    reference_sources: list[StyleStealSource] | None = None,
+    set_base_reference: bool = False,
+) -> InferredProjectStyle:
+    """Infer an in-memory project style from instruction + optional references."""
+    resolved_sources = list(reference_sources or [])
+    suggestion = analyzer.analyze_instruction(
+        instruction=instruction,
+        reference_sources=resolved_sources,
+    )
+    should_set_reference = bool(resolved_sources) and (
+        set_base_reference or suggestion.use_as_base_reference
+    )
+    project_style = ProjectStyleConfig(
+        style_id=None,
+        base_prompt=suggestion.base_prompt,
+        negative_prompt=suggestion.negative_prompt,
+        reference_images=(
+            [str(source.path) for source in resolved_sources]
+            if should_set_reference
+            else []
+        ),
+        reference_comments=suggestion.reference_comments,
+    )
+    return InferredProjectStyle(
+        project_style=project_style,
+        suggestion=suggestion,
+        reference_sources=resolved_sources,
+    )
 
 
 def load_style_steal_source(path: Path) -> StyleStealSource:
@@ -193,6 +295,28 @@ Rules:
 - Decide use_as_base_reference:
   - true when the source is a broadly reusable style anchor that improves consistency.
   - false when the source has a very specific layout/composition that would overconstrain generations.
+- base_reference_reason must explain the decision in one concise sentence.
+- Never include markdown or extra keys.
+""".strip()
+
+_STYLE_GENERATE_PROMPT = """
+You are generating a reusable visual style for AI-generated slides from user direction.
+
+Analyze the style instruction and any attached reference images, then return ONLY strict JSON
+with this schema:
+{
+  "base_prompt": string,
+  "negative_prompt": string,
+  "reference_comments": string[],
+  "use_as_base_reference": boolean,
+  "base_reference_reason": string
+}
+
+Rules:
+- base_prompt must capture reusable style traits, not slide-specific content.
+- negative_prompt should list concrete things to avoid.
+- reference_comments should be short actionable style notes.
+- use_as_base_reference should be true only if attached references are broad reusable style anchors.
 - base_reference_reason must explain the decision in one concise sentence.
 - Never include markdown or extra keys.
 """.strip()

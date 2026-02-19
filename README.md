@@ -1,51 +1,91 @@
 # nanoslides
 
-`nanoslides` is a Python CLI and library foundation for generating presentation slides
-with AI image models.
+`nanoslides` is a Python library and CLI designed to generate high-quality presentation slides using AI image models. 
 
-## Quick start
+Unlike tools that prioritize one-off generations, `nanoslides` is built to be used **programmatically**. It focuses on maintaining visual consistency across an entire deck through a robust styling system and project-state management.
+
+## Key Concepts
+
+- **Library First**: Designed to be integrated into web apps, automated agents, and custom scripts.
+- **Stateless Generation**: The core engines can generate multiple variations without forcing side effects on your project state.
+- **Consistent Styling**: Define global or project-specific styles (base prompts, negative prompts, and reference images) to ensure every slide feels part of the same deck.
+- **CLI for Humans & Agents**: A powerful interface for quick iterations and for AI agents that need to execute slide generation commands.
+
+## Installation
 
 ```bash
-pip install .
-nanoslides --help
-nanoslides setup
-nanoslides init MyProject
-nanoslides styles create
-nanoslides styles create historic --global --slides-base-reference .\image.png
-nanoslides styles edit historic --slides-base-reference .\image.png
-nanoslides styles steal .\style-source.png
-nanoslides styles steal .\style-source.png --set-base-reference
-nanoslides styles
-nanoslides generate "A minimalist title slide about AI safety" --model flash
-nanoslides edit slide-abc123 "Translate all text to Spanish"
-nanoslides edit .\slides\slide-abc123.png "Replace the person in the top-left with Ricardo J. Alfaro" --references .\rja.png
-nanoslides export --format pptx
+pip install nanoslides
 ```
 
-This repository currently includes the architecture skeleton, configuration loading,
-and foundational CLI commands, including NanoBanana-backed slide generation.
+## Programmatic Usage
 
-## Persistent styles
+You can use `nanoslides` directly in your Python projects. This is the recommended way for building applications that need to generate multiple variations before committing them to a presentation.
 
-- Project-level defaults live in `./style.json` (`base_prompt`, `negative_prompt`,
-  `reference_images`, `reference_comments`, and optional `style_id`).
-- Global reusable presets live in `~/.nanoslides/styles.json` and can be selected
-  with `--style-id` or by setting `style_id` in project `style.json`.
-- Use `--slides-base-reference` on `nanoslides styles create/edit` for images that
-  are included in all slide generation/edit requests for visual consistency.
-- `nanoslides styles steal <image>` uses Gemini 3 Pro to infer a project `style.json`
-  and decides if the source should be a persistent base reference; use
-  `--set-base-reference` to force it on, and `--timeout-seconds` to fail fast if
-  analysis stalls.
-- `nanoslides generate` automatically merges global + project style context and
-  injects it into generation/edit prompts and reference inputs.
+```python
+from pathlib import Path
+from nanoslides.engines.nanobanana import NanoBananaSlideEngine, NanoBananaModel
+from nanoslides.core.style import ResolvedStyle
 
-## Guided CLI workflow
+# 1. Initialize the engine
+engine = NanoBananaSlideEngine(
+    model=NanoBananaModel.PRO,
+    api_key="YOUR_GEMINI_API_KEY",
+    output_dir=Path("./my_slides")
+)
 
-- `nanoslides generate` runs directly when a prompt is provided, and only opens
-  the guided prompt/model/style/reference flow when the prompt is omitted.
-- `nanoslides styles create` and `nanoslides styles edit` support guided setup.
-- `nanoslides generate` defaults to a `16:9` output aspect ratio; override with
-  `--aspect-ratio` for other formats.
-- Long image generation calls display a spinner/status indicator.
-- Default logging is quiet; use `-v` for verbose provider/network logs.
+# 2. Define a style (optional)
+style = ResolvedStyle(
+    base_prompt="Minimalist corporate design, flat vectors, blue and white palette.",
+    reference_images=["./assets/brand_guide_style.png"]
+)
+
+# 3. Generate variations
+# The library doesn't update slides.json automatically; the client handles the state.
+result = engine.generate(
+    prompt="A slide showing a growth chart for Q4 revenue",
+    style=style
+)
+
+print(f"Slide saved to: {result.local_path}")
+print(f"Revised prompt used: {result.revised_prompt}")
+```
+
+## CLI Usage
+
+The CLI is perfect for managing projects and providing a guided workflow.
+
+### Quick Start
+```bash
+# Setup your API keys
+nanoslides setup
+
+# Initialize a new presentation project
+nanoslides init MyPresentation
+cd MyPresentation
+
+# Create a consistent style for the project
+nanoslides styles create --slides-base-reference ./branding.png
+
+# Generate a slide
+nanoslides generate "Introduction to AI in healthcare"
+```
+
+### Advanced CLI Commands
+- `nanoslides styles steal ./image.png`: Automatically infer style parameters from an existing image using Gemini Vision.
+- `nanoslides styles generate "clean Swiss-style layouts with muted blue accents" --reference-image ./brand.png`: Preview a generated style, then choose whether to save it to project `style.json` or globally.
+- `nanoslides edit <slide-id> "Make the colors warmer"`: Iterate on a specific slide while maintaining its context.
+- `nanoslides export --format pptx`: Compile your generated images into a PowerPoint file.
+
+## Project Structure
+
+- `slides.json`: Tracks the current state of your presentation (order, IDs, prompts, and file paths).
+- `style.json`: Project-specific style overrides.
+- `slides/`: Default directory for generated assets.
+
+## Roadmap & Improvements
+
+We are currently working on:
+- [ ] Separating CLI state management from the core library logic (removing "draft" hacks from the core).
+- [ ] Enhancing the `SlideEngine` interface to support more providers (OpenAI, Flux).
+- [ ] Improving the "Style Steal" accuracy for complex compositions.
+- [ ] Adding more robust unit testing for the library API.

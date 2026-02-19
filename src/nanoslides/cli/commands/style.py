@@ -21,7 +21,12 @@ from nanoslides.core.style import (
     save_global_styles,
     save_project_style,
 )
-from nanoslides.core.style_steal import GeminiStyleStealAnalyzer, load_style_steal_source
+from nanoslides.core.style_steal import (
+    GeminiStyleStealAnalyzer,
+    infer_project_style_from_instruction,
+    infer_project_style_from_source,
+    load_style_steal_source,
+)
 
 style_app = typer.Typer(
     help="Style management commands.",
@@ -443,7 +448,11 @@ def style_steal_command(
         with console.status(
             f"[bold cyan]Analyzing style with Gemini 3 Pro (timeout: {timeout_seconds}s)...[/]"
         ):
-            suggestion = analyzer.analyze(source_asset)
+            inferred_style = infer_project_style_from_source(
+                analyzer=analyzer,
+                source=source_asset,
+                set_base_reference=set_base_reference,
+            )
     except ValueError as exc:
         console.print(f"[bold red]{exc}[/]")
         raise typer.Exit(code=1) from exc
@@ -455,23 +464,10 @@ def style_steal_command(
         raise typer.Exit(code=1) from exc
 
     output_path = output.expanduser().resolve()
-    should_set_reference = set_base_reference or suggestion.use_as_base_reference
-    reference_images = (
-        [_style_reference_path_for_output(source_asset.path, output_path)]
-        if should_set_reference
-        else []
-    )
-
-    project_style = ProjectStyleConfig(
-        style_id=None,
-        base_prompt=suggestion.base_prompt,
-        negative_prompt=suggestion.negative_prompt,
-        reference_images=reference_images,
-        reference_comments=suggestion.reference_comments,
-    )
+    project_style = _project_style_for_output(inferred_style.project_style, output_path)
     save_project_style(project_style, path=output_path)
 
-    recommendation = "yes" if suggestion.use_as_base_reference else "no"
+    recommendation = "yes" if inferred_style.suggestion.use_as_base_reference else "no"
     if set_base_reference:
         recommendation = f"{recommendation} (overridden to yes by --set-base-reference)"
     console.print(
@@ -480,11 +476,219 @@ def style_steal_command(
             f"Source: [bold]{source_asset.path}[/]\n"
             f"Model: [bold]gemini-3-pro-preview[/]\n"
             f"Recommended base reference: [bold]{recommendation}[/]\n"
-            f"Reason: {suggestion.base_reference_reason}\n"
+            f"Reason: {inferred_style.suggestion.base_reference_reason}\n"
             f"Saved to [bold]{output_path}[/]",
             title="nanoslides",
             border_style="green",
         )
+    )
+
+
+@style_app.command("generate")
+def style_generate_command(
+    instruction: str = typer.Argument(
+        ...,
+        help="Instruction describing the desired reusable visual style.",
+    ),
+    reference_image: list[Path] | None = typer.Option(
+        None,
+        "--reference-image",
+        help=(
+            "Optional style reference image path (repeat --reference-image for multiple files)."
+        ),
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+    ),
+    set_base_reference: bool = typer.Option(
+        False,
+        "--set-base-reference",
+        help="Force using provided reference images as slides base references.",
+    ),
+    global_scope: bool = typer.Option(
+        False,
+        "--global",
+        help="Save as a global reusable style preset.",
+    ),
+    style_id: str | None = typer.Option(
+        None,
+        "--style-id",
+        help="Global style ID used with --global.",
+    ),
+    output: Path = typer.Option(
+        PROJECT_STYLE_PATH,
+        "--output",
+        help="Output style config path (defaults to ./style.json).",
+    ),
+    timeout_seconds: int = typer.Option(
+        120,
+        "--timeout-seconds",
+        min=10,
+        help="Gemini analysis timeout in seconds.",
+    ),
+    no_interactive: bool = typer.Option(
+        False,
+        "--no-interactive",
+        help="Skip review prompts and save directly using provided options.",
+    ),
+) -> None:
+    """Generate a project style from an instruction and optional reference images."""
+    config = load_global_config()
+    api_key = get_gemini_api_key(config)
+    if not api_key:
+        console.print(
+            "[bold red]Missing Gemini API key. Run `nanoslides setup` first.[/]"
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        reference_sources = [
+            load_style_steal_source(path) for path in (reference_image or [])
+        ]
+        analyzer = GeminiStyleStealAnalyzer(
+            api_key=api_key,
+            timeout_seconds=float(timeout_seconds),
+        )
+        with console.status(
+            f"[bold cyan]Generating style with Gemini 3 Pro (timeout: {timeout_seconds}s)...[/]"
+        ):
+            inferred_style = infer_project_style_from_instruction(
+                analyzer=analyzer,
+                instruction=instruction,
+                reference_sources=reference_sources,
+                set_base_reference=set_base_reference,
+            )
+    except ValueError as exc:
+        console.print(f"[bold red]{exc}[/]")
+        raise typer.Exit(code=1) from exc
+    except APIError as exc:
+        console.print(f"[bold red]Style generation API error: {exc}[/]")
+        raise typer.Exit(code=1) from exc
+    except RuntimeError as exc:
+        console.print(f"[bold red]Style generation failed: {exc}[/]")
+        raise typer.Exit(code=1) from exc
+
+    _render_generated_style_preview(
+        inferred_style.project_style,
+        recommendation=inferred_style.suggestion.base_reference_reason,
+        recommendation_uses_reference=inferred_style.suggestion.use_as_base_reference,
+        reference_count=len(reference_sources),
+    )
+
+    should_save = True
+    resolved_global_scope = global_scope
+    resolved_style_id = style_id.strip() if style_id else None
+    if not no_interactive and sys.stdin.isatty():
+        should_save = Confirm.ask("Save this generated style?", default=True)
+        if should_save and not resolved_global_scope:
+            resolved_global_scope = Confirm.ask(
+                "Save as global reusable preset?",
+                default=False,
+            )
+        if should_save and resolved_global_scope and not resolved_style_id:
+            resolved_style_id = Prompt.ask("Global style ID").strip()
+
+    if not should_save:
+        console.print("[yellow]Generated style was not saved.[/]")
+        return
+
+    if resolved_global_scope:
+        if not resolved_style_id:
+            console.print("[bold red]A style ID is required when using --global.[/]")
+            raise typer.Exit(code=1)
+        style_definition = _style_definition_for_global(inferred_style.project_style)
+        styles = load_global_styles()
+        styles.styles[resolved_style_id] = style_definition
+        save_global_styles(styles)
+        console.print(
+            Panel.fit(
+                f"[bold green]Style generated[/]\n"
+                f"Model: [bold]gemini-3-pro-preview[/]\n"
+                f"Saved global style [bold]{resolved_style_id}[/] to [bold]{GLOBAL_STYLES_PATH}[/]",
+                title="nanoslides",
+                border_style="green",
+            )
+        )
+        return
+
+    output_path = output.expanduser().resolve()
+    project_style = _project_style_for_output(inferred_style.project_style, output_path)
+    save_project_style(project_style, path=output_path)
+
+    recommendation = "yes" if inferred_style.suggestion.use_as_base_reference else "no"
+    if not reference_sources:
+        recommendation = "n/a (no reference images provided)"
+    elif set_base_reference:
+        recommendation = f"{recommendation} (overridden to yes by --set-base-reference)"
+    console.print(
+        Panel.fit(
+            f"[bold green]Style generated[/]\n"
+            f"Model: [bold]gemini-3-pro-preview[/]\n"
+            f"Reference images analyzed: [bold]{len(reference_sources)}[/]\n"
+            f"Recommended base reference: [bold]{recommendation}[/]\n"
+            f"Reason: {inferred_style.suggestion.base_reference_reason}\n"
+            f"Saved to [bold]{output_path}[/]",
+            title="nanoslides",
+            border_style="green",
+        )
+    )
+
+
+def _render_generated_style_preview(
+    project_style: ProjectStyleConfig,
+    *,
+    recommendation: str,
+    recommendation_uses_reference: bool,
+    reference_count: int,
+) -> None:
+    table = Table(title="Generated style preview", show_header=False, box=None)
+    table.add_column("Field", style="bold cyan")
+    table.add_column("Value")
+    table.add_row("Base prompt", project_style.base_prompt or "[dim](empty)[/]")
+    table.add_row("Negative prompt", project_style.negative_prompt or "[dim](empty)[/]")
+    table.add_row(
+        "Reference images",
+        str(len(project_style.reference_images)) + f" kept from {reference_count} analyzed",
+    )
+    comments = (
+        "\n".join(f"- {comment}" for comment in project_style.reference_comments)
+        if project_style.reference_comments
+        else "[dim](none)[/]"
+    )
+    table.add_row("Reference comments", comments)
+    table.add_row(
+        "Base reference recommendation",
+        "yes" if recommendation_uses_reference else "no",
+    )
+    table.add_row("Recommendation reason", recommendation)
+    console.print(table)
+
+
+def _style_definition_for_global(project_style: ProjectStyleConfig) -> StyleDefinition:
+    return StyleDefinition(
+        base_prompt=project_style.base_prompt,
+        negative_prompt=project_style.negative_prompt,
+        reference_images=[
+            str(Path(path).expanduser().resolve()) for path in project_style.reference_images
+        ],
+        reference_comments=project_style.reference_comments,
+    )
+
+
+def _project_style_for_output(
+    project_style: ProjectStyleConfig,
+    output_path: Path,
+) -> ProjectStyleConfig:
+    if not project_style.reference_images:
+        return project_style
+    return project_style.model_copy(
+        update={
+            "reference_images": [
+                _style_reference_path_for_output(Path(path), output_path)
+                for path in project_style.reference_images
+            ]
+        }
     )
 
 
