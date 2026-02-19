@@ -8,6 +8,7 @@ import pytest
 
 from nanoslides.cli.commands import style as style_commands
 from nanoslides.core.style import GlobalStylesConfig, load_project_style
+import nanoslides.core.style_steal as style_steal_module
 from nanoslides.core.style_steal import (
     GeminiStyleStealAnalyzer,
     StyleStealSuggestion,
@@ -31,6 +32,24 @@ class _FakeModels:
                 '"base_reference_reason":"The references provide reusable visual anchors."}'
             )
         )
+
+
+def test_style_analyzer_initializes_timeout_in_milliseconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_client(*, api_key: str, http_options: object) -> object:
+        captured["api_key"] = api_key
+        captured["http_options"] = http_options
+        return SimpleNamespace(models=_FakeModels())
+
+    monkeypatch.setattr(style_steal_module.genai, "Client", _fake_client)
+    GeminiStyleStealAnalyzer(api_key="abc", timeout_seconds=120.0)
+
+    assert captured["api_key"] == "abc"
+    http_options = captured["http_options"]
+    assert getattr(http_options, "timeout", None) == 120000
 
 
 def test_analyze_instruction_uses_gemini_3_pro_with_reference_images(tmp_path: Path) -> None:

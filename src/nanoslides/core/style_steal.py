@@ -58,11 +58,12 @@ class GeminiStyleStealAnalyzer:
     def __init__(self, *, api_key: str, timeout_seconds: float = 120.0) -> None:
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be greater than zero.")
+        timeout_milliseconds = max(1, int(timeout_seconds * 1000))
         self._client = genai.Client(
             api_key=api_key,
             http_options=types.HttpOptions(
                 api_version="v1alpha",
-                timeout=timeout_seconds,
+                timeout=timeout_milliseconds,
                 retry_options=types.HttpRetryOptions(attempts=2),
             ),
         )
