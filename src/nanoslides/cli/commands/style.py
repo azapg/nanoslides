@@ -10,6 +10,7 @@ from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
+from nanoslides.cli.errors import render_cli_error
 from nanoslides.core.config import get_gemini_api_key, load_global_config
 from nanoslides.core.style import (
     GLOBAL_STYLES_PATH,
@@ -457,8 +458,8 @@ def style_steal_command(
         console.print(f"[bold red]{exc}[/]")
         raise typer.Exit(code=1) from exc
     except APIError as exc:
-        console.print(f"[bold red]Style extraction API error: {exc}[/]")
-        raise typer.Exit(code=1) from exc
+        render_cli_error(exc, console=console, action="Style extraction failed.")
+        raise typer.Exit(code=1)
     except RuntimeError as exc:
         console.print(f"[bold red]Style extraction failed: {exc}[/]")
         raise typer.Exit(code=1) from exc
@@ -563,8 +564,8 @@ def style_generate_command(
         console.print(f"[bold red]{exc}[/]")
         raise typer.Exit(code=1) from exc
     except APIError as exc:
-        console.print(f"[bold red]Style generation API error: {exc}[/]")
-        raise typer.Exit(code=1) from exc
+        render_cli_error(exc, console=console, action="Style generation failed.")
+        raise typer.Exit(code=1)
     except RuntimeError as exc:
         console.print(f"[bold red]Style generation failed: {exc}[/]")
         raise typer.Exit(code=1) from exc

@@ -18,6 +18,7 @@ from nanoslides.cli.commands.presentation import presentation_command
 from nanoslides.cli.commands.remove import remove_command
 from nanoslides.cli.commands.setup import setup_command
 from nanoslides.cli.commands.style import style_app
+from nanoslides.cli.errors import render_cli_error
 from nanoslides.core.config import load_global_config
 from nanoslides.core.presentation import Presentation
 from nanoslides.core.project import (
@@ -109,5 +110,14 @@ def _render_project_summary(presentation: Presentation) -> None:
 
 def run() -> None:
     """CLI entrypoint used by console scripts."""
-    app()
+    try:
+        app()
+    except typer.Exit as exc:
+        raise SystemExit(exc.exit_code) from None
+    except KeyboardInterrupt as exc:
+        render_cli_error(exc, console=console)
+        raise SystemExit(130) from None
+    except Exception as exc:
+        render_cli_error(exc, console=console)
+        raise SystemExit(1) from None
 
