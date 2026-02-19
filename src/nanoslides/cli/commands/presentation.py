@@ -21,6 +21,7 @@ from rich.table import Table
 from nanoslides.cli.image_store import persist_slide_result
 from nanoslides.core.config import GlobalConfig, get_gemini_api_key, load_global_config
 from nanoslides.core.presentation import Presentation
+from nanoslides.core.provider_errors import is_service_unavailable_error
 from nanoslides.core.project import (
     PROJECT_STATE_FILE,
     load_project_state,
@@ -40,7 +41,8 @@ from nanoslides.engines.nanobanana import (
 from pydantic import BaseModel, Field
 
 console = Console()
-_PLANNER_MODEL = "gemini-3-pro-preview"
+_PLANNER_PRIMARY_MODEL = "gemini-3-pro-preview"
+_PLANNER_FALLBACK_MODEL = "gemini-2.5-pro"
 
 
 class DetailLevel(str, Enum):
@@ -209,7 +211,7 @@ def presentation_command(
 
     try:
         with console.status("[bold cyan]Planning presentation with Gemini 3 Pro...[/]"):
-            plan = _plan_presentation(
+            plan, planner_model = _plan_presentation(
                 api_key=api_key,
                 request=request,
                 style=merged_style,
@@ -258,7 +260,7 @@ def presentation_command(
         Panel.fit(
             f"[bold green]Presentation generated[/]\n"
             f"Slides: [bold]{len(generated_rows)}[/]\n"
-            f"Planner: [bold]{_PLANNER_MODEL}[/]\n"
+            f"Planner: [bold]{planner_model}[/]\n"
             f"Generator model: [bold]{effective_model.value}[/]\n"
             f"Output dir: [bold]{target_output_dir.resolve()}[/]",
             title="nanoslides",
@@ -376,7 +378,7 @@ def _plan_presentation(
     request: PresentationRequest,
     style: ResolvedStyle,
     has_existing_style: bool,
-) -> PresentationPlan:
+) -> tuple[PresentationPlan, str]:
     client = genai.Client(
         api_key=api_key,
         http_options=types.HttpOptions(
@@ -392,23 +394,42 @@ def _plan_presentation(
     )
     contents: list[Any] = [prompt]
     contents.extend(_planner_reference_parts(style.reference_images))
-    response = client.models.generate_content(
-        model=_PLANNER_MODEL,
-        contents=contents,
-        config=types.GenerateContentConfig(
-            temperature=1.0,
-            response_mime_type="application/json",
-            response_json_schema=PresentationPlan.model_json_schema(),
-            thinking_config=types.ThinkingConfig(thinking_level="high"),
-        ),
-    )
+    planner_models = [_PLANNER_PRIMARY_MODEL, _PLANNER_FALLBACK_MODEL]
+    response = None
+    planner_model_used = _PLANNER_PRIMARY_MODEL
+    last_error: BaseException | None = None
+    for index, planner_model in enumerate(planner_models):
+        try:
+            response = client.models.generate_content(
+                model=planner_model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    temperature=1.0,
+                    response_mime_type="application/json",
+                    response_json_schema=PresentationPlan.model_json_schema(),
+                    thinking_config=types.ThinkingConfig(thinking_level="high"),
+                ),
+            )
+            planner_model_used = planner_model
+            break
+        except Exception as exc:
+            last_error = exc
+            should_retry = (
+                index < len(planner_models) - 1 and is_service_unavailable_error(exc)
+            )
+            if not should_retry:
+                raise
+    if response is None:
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Presentation planner failed before receiving a response.")
     payload = _parse_json_response(response)
     plan = PresentationPlan.model_validate(payload)
     if request.slide_count is not None and len(plan.slides) != request.slide_count:
         raise RuntimeError(
             f"Planner returned {len(plan.slides)} slides but slide-count={request.slide_count}."
         )
-    return plan
+    return plan, planner_model_used
 
 
 def _build_planner_prompt(

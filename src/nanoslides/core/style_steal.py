@@ -13,7 +13,11 @@ import httpx
 from google import genai
 from google.genai import types
 
+from nanoslides.core.provider_errors import is_service_unavailable_error
 from nanoslides.core.style import ProjectStyleConfig
+
+_STYLE_ANALYSIS_PRIMARY_MODEL = "gemini-3-pro-preview"
+_STYLE_ANALYSIS_FALLBACK_MODEL = "gemini-2.5-pro"
 
 
 class StyleStealSourceKind(str, Enum):
@@ -67,6 +71,7 @@ class GeminiStyleStealAnalyzer:
                 retry_options=types.HttpRetryOptions(attempts=2),
             ),
         )
+        self.last_model_used = _STYLE_ANALYSIS_PRIMARY_MODEL
 
     def analyze(self, source: StyleStealSource) -> StyleStealSuggestion:
         if source.kind != StyleStealSourceKind.IMAGE:
@@ -103,19 +108,36 @@ class GeminiStyleStealAnalyzer:
         return self._analyze_contents(contents=contents)
 
     def _analyze_contents(self, *, contents: list[Any]) -> StyleStealSuggestion:
-        try:
-            response = self._client.models.generate_content(
-                model="gemini-3-pro-preview",
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    temperature=1.0,
-                    response_mime_type="application/json",
-                ),
-            )
-        except httpx.TimeoutException as exc:
-            raise RuntimeError(
-                "Style analysis timed out. Retry with a higher --timeout-seconds value."
-            ) from exc
+        models_to_try = [_STYLE_ANALYSIS_PRIMARY_MODEL, _STYLE_ANALYSIS_FALLBACK_MODEL]
+        response = None
+        last_error: BaseException | None = None
+        for index, model in enumerate(models_to_try):
+            try:
+                response = self._client.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        temperature=1.0,
+                        response_mime_type="application/json",
+                    ),
+                )
+                self.last_model_used = model
+                break
+            except httpx.TimeoutException as exc:
+                raise RuntimeError(
+                    "Style analysis timed out. Retry with a higher --timeout-seconds value."
+                ) from exc
+            except Exception as exc:
+                last_error = exc
+                should_retry = (
+                    index < len(models_to_try) - 1 and is_service_unavailable_error(exc)
+                )
+                if not should_retry:
+                    raise
+        if response is None:
+            if last_error is not None:
+                raise last_error
+            raise RuntimeError("Style analysis failed before receiving a response.")
         payload = _parse_json_response(response)
 
         base_prompt = str(payload.get("base_prompt", "")).strip()

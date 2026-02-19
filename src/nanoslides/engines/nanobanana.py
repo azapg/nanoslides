@@ -12,6 +12,7 @@ from google import genai
 from google.genai import types
 
 from nanoslides.core.interfaces import SlideEngine, SlideResult
+from nanoslides.core.provider_errors import is_service_unavailable_error
 from nanoslides.core.style import ResolvedStyle
 
 _MODEL_MAP = {
@@ -30,6 +31,12 @@ class NanoBananaModel(str, Enum):
     @property
     def api_model(self) -> str:
         return _MODEL_MAP[self.value]
+
+
+def _fallback_model_for(model: NanoBananaModel) -> NanoBananaModel | None:
+    if model is NanoBananaModel.PRO:
+        return NanoBananaModel.FLASH
+    return None
 
 
 class ImageAspectRatio(str, Enum):
@@ -58,7 +65,6 @@ class NanoBananaSlideEngine(SlideEngine):
         output_dir: Path | str | None = None,
     ) -> None:
         self.model = model
-        self._api_model = model.api_model
         self._client = genai.Client(api_key=_resolve_api_key(api_key))
 
     def generate(
@@ -73,8 +79,7 @@ class NanoBananaSlideEngine(SlideEngine):
         contents: list[Any] = [revised_prompt]
         contents.extend(_style_reference_parts(resolved_style))
 
-        response = self._client.models.generate_content(
-            model=self._api_model,
+        response, used_model = self._generate_content_with_fallback(
             contents=contents,
             config=types.GenerateContentConfig(
                 response_modalities=["TEXT", "IMAGE"],
@@ -85,6 +90,7 @@ class NanoBananaSlideEngine(SlideEngine):
             response,
             revised_prompt=revised_prompt,
             aspect_ratio=aspect_ratio,
+            used_model=used_model,
         )
 
     def edit(
@@ -99,12 +105,15 @@ class NanoBananaSlideEngine(SlideEngine):
         revised_prompt = _build_prompt(instruction, resolved_style, is_edit=True)
         contents: list[Any] = [revised_prompt, _bytes_part(image)]
         contents.extend(_style_reference_parts(resolved_style))
-        response = self._client.models.generate_content(
-            model=self._api_model,
+        response, used_model = self._generate_content_with_fallback(
             contents=contents,
             config=types.GenerateContentConfig(response_modalities=["TEXT", "IMAGE"]),
         )
-        result = self._to_slide_result(response, revised_prompt=revised_prompt)
+        result = self._to_slide_result(
+            response,
+            revised_prompt=revised_prompt,
+            used_model=used_model,
+        )
         if mask is not None:
             result.metadata["mask"] = mask
         return result
@@ -115,6 +124,7 @@ class NanoBananaSlideEngine(SlideEngine):
         *,
         revised_prompt: str,
         aspect_ratio: ImageAspectRatio | None = None,
+        used_model: NanoBananaModel,
     ) -> SlideResult:
         text_parts: list[str] = []
         image_bytes: bytes | None = None
@@ -135,10 +145,13 @@ class NanoBananaSlideEngine(SlideEngine):
 
         metadata: dict[str, Any] = {
             "engine": "nanobanana",
-            "model_selector": self.model.value,
-            "model": self._api_model,
+            "model_selector": used_model.value,
+            "model": used_model.api_model,
             "mime_type": image_mime_type,
         }
+        if used_model is not self.model:
+            metadata["fallback_from_model_selector"] = self.model.value
+            metadata["fallback_from_model"] = self.model.api_model
         if aspect_ratio is not None:
             metadata["aspect_ratio"] = aspect_ratio.value
         if text_parts:
@@ -150,6 +163,37 @@ class NanoBananaSlideEngine(SlideEngine):
             revised_prompt=revised_prompt,
             metadata=metadata,
         )
+
+    def _generate_content_with_fallback(
+        self,
+        *,
+        contents: list[Any],
+        config: types.GenerateContentConfig,
+    ) -> tuple[Any, NanoBananaModel]:
+        models_to_try = [self.model]
+        fallback_model = _fallback_model_for(self.model)
+        if fallback_model is not None:
+            models_to_try.append(fallback_model)
+
+        last_error: BaseException | None = None
+        for index, model in enumerate(models_to_try):
+            try:
+                response = self._client.models.generate_content(
+                    model=model.api_model,
+                    contents=contents,
+                    config=config,
+                )
+                return response, model
+            except Exception as exc:
+                last_error = exc
+                should_retry = (
+                    index < len(models_to_try) - 1 and is_service_unavailable_error(exc)
+                )
+                if not should_retry:
+                    raise
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("NanoBanana request failed before receiving a response.")
 
 
 def _resolve_api_key(api_key: str | None) -> str:

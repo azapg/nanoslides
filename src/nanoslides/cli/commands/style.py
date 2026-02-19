@@ -454,6 +454,7 @@ def style_steal_command(
                 source=source_asset,
                 set_base_reference=set_base_reference,
             )
+        used_model = getattr(analyzer, "last_model_used", "gemini-3-pro-preview")
     except ValueError as exc:
         console.print(f"[bold red]{exc}[/]")
         raise typer.Exit(code=1) from exc
@@ -475,7 +476,7 @@ def style_steal_command(
         Panel.fit(
             f"[bold green]Style extracted[/]\n"
             f"Source: [bold]{source_asset.path}[/]\n"
-            f"Model: [bold]gemini-3-pro-preview[/]\n"
+            f"Model: [bold]{used_model}[/]\n"
             f"Recommended base reference: [bold]{recommendation}[/]\n"
             f"Reason: {inferred_style.suggestion.base_reference_reason}\n"
             f"Saved to [bold]{output_path}[/]",
@@ -560,6 +561,7 @@ def style_generate_command(
                 reference_sources=reference_sources,
                 set_base_reference=set_base_reference,
             )
+        used_model = getattr(analyzer, "last_model_used", "gemini-3-pro-preview")
     except ValueError as exc:
         console.print(f"[bold red]{exc}[/]")
         raise typer.Exit(code=1) from exc
@@ -605,7 +607,7 @@ def style_generate_command(
         console.print(
             Panel.fit(
                 f"[bold green]Style generated[/]\n"
-                f"Model: [bold]gemini-3-pro-preview[/]\n"
+                f"Model: [bold]{used_model}[/]\n"
                 f"Saved global style [bold]{resolved_style_id}[/] to [bold]{GLOBAL_STYLES_PATH}[/]",
                 title="nanoslides",
                 border_style="green",
@@ -625,7 +627,7 @@ def style_generate_command(
     console.print(
         Panel.fit(
             f"[bold green]Style generated[/]\n"
-            f"Model: [bold]gemini-3-pro-preview[/]\n"
+            f"Model: [bold]{used_model}[/]\n"
             f"Reference images analyzed: [bold]{len(reference_sources)}[/]\n"
             f"Recommended base reference: [bold]{recommendation}[/]\n"
             f"Reason: {inferred_style.suggestion.base_reference_reason}\n"
