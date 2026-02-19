@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import typer
+from google.genai.errors import APIError
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
@@ -417,6 +418,12 @@ def style_steal_command(
         "--output",
         help="Output style config path (defaults to ./style.json).",
     ),
+    timeout_seconds: int = typer.Option(
+        120,
+        "--timeout-seconds",
+        min=10,
+        help="Gemini analysis timeout in seconds.",
+    ),
 ) -> None:
     """Extract a reusable project style from a source asset."""
     config = load_global_config()
@@ -429,11 +436,19 @@ def style_steal_command(
 
     try:
         source_asset = load_style_steal_source(source)
-        analyzer = GeminiStyleStealAnalyzer(api_key=api_key)
-        with console.status("[bold cyan]Analyzing style with Gemini 3 Pro...[/]"):
+        analyzer = GeminiStyleStealAnalyzer(
+            api_key=api_key,
+            timeout_seconds=float(timeout_seconds),
+        )
+        with console.status(
+            f"[bold cyan]Analyzing style with Gemini 3 Pro (timeout: {timeout_seconds}s)...[/]"
+        ):
             suggestion = analyzer.analyze(source_asset)
     except ValueError as exc:
         console.print(f"[bold red]{exc}[/]")
+        raise typer.Exit(code=1) from exc
+    except APIError as exc:
+        console.print(f"[bold red]Style extraction API error: {exc}[/]")
         raise typer.Exit(code=1) from exc
     except RuntimeError as exc:
         console.print(f"[bold red]Style extraction failed: {exc}[/]")

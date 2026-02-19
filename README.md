@@ -35,7 +35,8 @@ and foundational CLI commands, including NanoBanana-backed slide generation.
   are included in all slide generation/edit requests for visual consistency.
 - `nanoslides styles steal <image>` uses Gemini 3 Pro to infer a project `style.json`
   and decides if the source should be a persistent base reference; use
-  `--set-base-reference` to force it on.
+  `--set-base-reference` to force it on, and `--timeout-seconds` to fail fast if
+  analysis stalls.
 - `nanoslides generate` automatically merges global + project style context and
   injects it into generation/edit prompts and reference inputs.
 

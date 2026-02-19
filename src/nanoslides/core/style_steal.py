@@ -43,10 +43,16 @@ class StyleStealSuggestion:
 class GeminiStyleStealAnalyzer:
     """Analyze a source asset and infer reusable slide style instructions."""
 
-    def __init__(self, *, api_key: str) -> None:
+    def __init__(self, *, api_key: str, timeout_seconds: float = 120.0) -> None:
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be greater than zero.")
         self._client = genai.Client(
             api_key=api_key,
-            http_options={"api_version": "v1alpha"},
+            http_options=types.HttpOptions(
+                api_version="v1alpha",
+                timeout=timeout_seconds,
+                retry_options=types.HttpRetryOptions(attempts=2),
+            ),
         )
 
     def analyze(self, source: StyleStealSource) -> StyleStealSuggestion:
