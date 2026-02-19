@@ -9,7 +9,7 @@ import sys
 import typer
 from rich.console import Console
 from rich.panel import Panel
-from rich.prompt import Confirm
+from rich.prompt import Confirm, Prompt
 
 from nanoslides.core.config import GlobalConfig, get_gemini_api_key, load_global_config
 from nanoslides.core.project import (
@@ -69,83 +69,89 @@ def edit_command(
     project_state: ProjectState | None = None
     slide_entry: SlideEntry | None = None
     draft_entry: SlideEntry | None = None
+    current_instruction = instruction
 
     try:
-        with console.status("[bold cyan]Editing slide...[/]", spinner="dots"):
-            source_image_path, project_state, slide_entry = _resolve_edit_target(target)
-            resolved_style = resolve_style_context(style_id=effective_style_id)
-            merged_style = merge_style_references(resolved_style, selected_references)
-            engine = NanoBananaSlideEngine(
-                model=effective_model,
-                api_key=api_key,
-                output_dir=target_output_dir,
+        source_image_path, project_state, slide_entry = _resolve_edit_target(target)
+        resolved_style = resolve_style_context(style_id=effective_style_id)
+        merged_style = merge_style_references(resolved_style, selected_references)
+        engine = NanoBananaSlideEngine(
+            model=effective_model,
+            api_key=api_key,
+            output_dir=target_output_dir,
+        )
+        while True:
+            with console.status("[bold cyan]Editing slide...[/]", spinner="dots"):
+                result = engine.edit(
+                    image=source_image_path.read_bytes(),
+                    instruction=current_instruction,
+                    style=merged_style,
+                )
+                draft_entry = _create_edit_draft(
+                    project_state=project_state,
+                    slide_entry=slide_entry,
+                    source_image_path=source_image_path,
+                    instruction=current_instruction,
+                    edited_image_path=result.local_path,
+                    metadata=result.metadata,
+                )
+
+            style_label = merged_style.style_id or "project/default"
+            references_count = len(merged_style.reference_images)
+            source_label = slide_entry.id if slide_entry else str(source_image_path)
+            if draft_entry is not None and slide_entry is not None and project_state is not None:
+                console.print(
+                    Panel.fit(
+                        f"[bold yellow]Draft slide saved[/]\n"
+                        f"Source: [bold]{source_label}[/]\n"
+                        f"Draft ID: [bold]{draft_entry.id}[/]\n"
+                        f"Model: [bold]{effective_model.value}[/]\n"
+                        f"Style: [bold]{style_label}[/]\n"
+                        f"References: [bold]{references_count}[/]\n"
+                        f"Saved to [bold]{result.local_path}[/]\n"
+                        f"Status: [bold]Needs review before applying[/]",
+                        title="nanoslides",
+                        border_style="yellow",
+                    )
+                )
+                if _should_apply_draft(slide_entry.id, draft_entry.id):
+                    _apply_draft_to_slide(
+                        project_state=project_state,
+                        slide_entry=slide_entry,
+                        draft_entry=draft_entry,
+                    )
+                    console.print(
+                        f"[bold green]Draft '{draft_entry.id}' applied to slide "
+                        f"'{slide_entry.id}'.[/]"
+                    )
+                    return
+                if _should_retry_edit_with_new_instruction(slide_entry.id, draft_entry.id):
+                    current_instruction = _prompt_new_edit_instruction(current_instruction)
+                    continue
+                console.print(
+                    f"[bold yellow]Draft '{draft_entry.id}' kept for later review.[/]"
+                )
+                return
+
+            console.print(
+                Panel.fit(
+                    f"[bold green]Slide edited[/]\n"
+                    f"Source: [bold]{source_label}[/]\n"
+                    f"Model: [bold]{effective_model.value}[/]\n"
+                    f"Style: [bold]{style_label}[/]\n"
+                    f"References: [bold]{references_count}[/]\n"
+                    f"Saved to [bold]{result.local_path}[/]",
+                    title="nanoslides",
+                    border_style="green",
+                )
             )
-            result = engine.edit(
-                image=source_image_path.read_bytes(),
-                instruction=instruction,
-                style=merged_style,
-            )
-            draft_entry = _create_edit_draft(
-                project_state=project_state,
-                slide_entry=slide_entry,
-                source_image_path=source_image_path,
-                instruction=instruction,
-                edited_image_path=result.local_path,
-                metadata=result.metadata,
-            )
+            return
     except ValueError as exc:
         console.print(f"[bold red]{exc}[/]")
         raise typer.Exit(code=1) from exc
     except RuntimeError as exc:
         console.print(f"[bold red]Edit failed: {exc}[/]")
         raise typer.Exit(code=1) from exc
-
-    style_label = merged_style.style_id or "project/default"
-    references_count = len(merged_style.reference_images)
-    source_label = slide_entry.id if slide_entry else str(source_image_path)
-    if draft_entry is not None and slide_entry is not None and project_state is not None:
-        console.print(
-            Panel.fit(
-                f"[bold yellow]Draft slide saved[/]\n"
-                f"Source: [bold]{source_label}[/]\n"
-                f"Draft ID: [bold]{draft_entry.id}[/]\n"
-                f"Model: [bold]{effective_model.value}[/]\n"
-                f"Style: [bold]{style_label}[/]\n"
-                f"References: [bold]{references_count}[/]\n"
-                f"Saved to [bold]{result.local_path}[/]\n"
-                f"Status: [bold]Needs review before applying[/]",
-                title="nanoslides",
-                border_style="yellow",
-            )
-        )
-        if _should_apply_draft(slide_entry.id, draft_entry.id):
-            _apply_draft_to_slide(
-                project_state=project_state,
-                slide_entry=slide_entry,
-                draft_entry=draft_entry,
-            )
-            console.print(
-                f"[bold green]Draft '{draft_entry.id}' applied to slide "
-                f"'{slide_entry.id}'.[/]"
-            )
-        else:
-            console.print(
-                f"[bold yellow]Draft '{draft_entry.id}' kept for later review.[/]"
-            )
-        return
-
-    console.print(
-        Panel.fit(
-            f"[bold green]Slide edited[/]\n"
-            f"Source: [bold]{source_label}[/]\n"
-            f"Model: [bold]{effective_model.value}[/]\n"
-            f"Style: [bold]{style_label}[/]\n"
-            f"References: [bold]{references_count}[/]\n"
-            f"Saved to [bold]{result.local_path}[/]",
-            title="nanoslides",
-            border_style="green",
-        )
-    )
 
 
 def _resolve_edit_target(target: str) -> tuple[Path, ProjectState | None, SlideEntry | None]:
@@ -270,8 +276,29 @@ def _should_apply_draft(source_slide_id: str, draft_id: str) -> bool:
         return False
     return Confirm.ask(
         f"Draft '{draft_id}' is ready for review. Save/apply it to '{source_slide_id}' now?",
+        default=True,
+    )
+
+
+def _should_retry_edit_with_new_instruction(source_slide_id: str, draft_id: str) -> bool:
+    if not sys.stdin.isatty():
+        return False
+    return Confirm.ask(
+        f"Draft '{draft_id}' was not applied to '{source_slide_id}'. Modify the edit "
+        "instruction and try again?",
         default=False,
     )
+
+
+def _prompt_new_edit_instruction(previous_instruction: str) -> str:
+    while True:
+        next_instruction = Prompt.ask(
+            "New edit instruction",
+            default=previous_instruction,
+        ).strip()
+        if next_instruction:
+            return next_instruction
+        console.print("[bold red]Edit instruction cannot be empty.[/]")
 
 
 def _resolve_config(ctx: typer.Context) -> GlobalConfig:

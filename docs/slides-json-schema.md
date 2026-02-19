@@ -47,9 +47,10 @@
 ## Edit review draft flow
 
 - `nanoslides edit` now saves edits as draft slide entries when the target maps to a project slide.
-- The CLI marks the output as `Needs review before applying` and prompts whether to save/apply it now.
+- The CLI marks the output as `Needs review before applying` and prompts whether to save/apply it now (default is `yes`).
 - If approved, the draft is applied to the source slide and the draft entry is removed.
-- If not approved, the draft entry remains in `slides.json` for later review.
+- If not approved, the CLI asks whether to modify the edit instruction and retry immediately.
+- If not approved and not retried, the draft entry remains in `slides.json` for later review.
 
 ## Legacy migration
 
