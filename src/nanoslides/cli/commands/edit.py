@@ -58,6 +58,12 @@ def edit_command(
         "--output-dir",
         help="Directory where edited images are saved.",
     ),
+    variations: int = typer.Option(
+        1,
+        "--variations",
+        min=1,
+        help="Number of edit variations to generate before choosing one to save.",
+    ),
 ) -> None:
     """Edit an existing slide image from an ID or file path."""
     config = _resolve_config(ctx)
@@ -80,25 +86,37 @@ def edit_command(
             api_key=api_key,
         )
         while True:
-            with console.status("[bold cyan]Editing slide...[/]", spinner="dots"):
-                result = engine.edit(
-                    image=source_image_path.read_bytes(),
-                    instruction=current_instruction,
-                    style=merged_style,
+            results = []
+            for index in range(variations):
+                status_message = (
+                    f"[bold cyan]Editing slide variation {index + 1}/{variations}...[/]"
+                    if variations > 1
+                    else "[bold cyan]Editing slide...[/]"
                 )
-                persisted_path = persist_slide_result(
-                    result,
-                    output_dir=target_output_dir,
-                    file_prefix="slide-edit",
-                )
-                draft_entry = _create_edit_draft(
-                    presentation=presentation,
-                    slide_entry=slide_entry,
-                    source_image_path=source_image_path,
-                    instruction=current_instruction,
-                    edited_image_path=persisted_path,
-                    metadata=result.metadata,
-                )
+                with console.status(status_message, spinner="dots"):
+                    results.append(
+                        engine.edit(
+                            image=source_image_path.read_bytes(),
+                            instruction=current_instruction,
+                            style=merged_style,
+                        )
+                    )
+
+            selected_index = _select_variation_index(count=len(results))
+            selected_result = results[selected_index]
+            persisted_path = persist_slide_result(
+                selected_result,
+                output_dir=target_output_dir,
+                file_prefix="slide-edit",
+            )
+            draft_entry = _create_edit_draft(
+                presentation=presentation,
+                slide_entry=slide_entry,
+                source_image_path=source_image_path,
+                instruction=current_instruction,
+                edited_image_path=persisted_path,
+                metadata=selected_result.metadata,
+            )
 
             style_label = merged_style.style_id or "project/default"
             references_count = len(merged_style.reference_images)
@@ -112,6 +130,7 @@ def edit_command(
                         f"Model: [bold]{effective_model.value}[/]\n"
                         f"Style: [bold]{style_label}[/]\n"
                         f"References: [bold]{references_count}[/]\n"
+                        f"Variation: [bold]{selected_index + 1}/{len(results)}[/]\n"
                         f"Saved to [bold]{persisted_path}[/]\n"
                         f"Status: [bold]Needs review before applying[/]",
                         title="nanoslides",
@@ -144,6 +163,7 @@ def edit_command(
                     f"Model: [bold]{effective_model.value}[/]\n"
                     f"Style: [bold]{style_label}[/]\n"
                     f"References: [bold]{references_count}[/]\n"
+                    f"Variation: [bold]{selected_index + 1}/{len(results)}[/]\n"
                     f"Saved to [bold]{persisted_path}[/]",
                     title="nanoslides",
                     border_style="green",
@@ -295,6 +315,25 @@ def _prompt_new_edit_instruction(previous_instruction: str) -> str:
         if next_instruction:
             return next_instruction
         console.print("[bold red]Edit instruction cannot be empty.[/]")
+
+
+def _select_variation_index(*, count: int) -> int:
+    if count <= 1:
+        return 0
+    if not sys.stdin.isatty():
+        console.print(
+            "[yellow]Generated multiple variations in non-interactive mode; "
+            "saving variation 1.[/]"
+        )
+        return 0
+
+    choices = [str(index) for index in range(1, count + 1)]
+    selected = Prompt.ask(
+        "Select variation to save",
+        choices=choices,
+        default="1",
+    )
+    return int(selected) - 1
 
 
 def _resolve_config(ctx: typer.Context) -> GlobalConfig:

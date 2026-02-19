@@ -70,6 +70,12 @@ def generate_command(
         case_sensitive=False,
         help="Output image aspect ratio.",
     ),
+    variations: int = typer.Option(
+        1,
+        "--variations",
+        min=1,
+        help="Number of variations to generate before choosing one to save.",
+    ),
     no_interactive: bool = typer.Option(
         False,
         "--no-interactive",
@@ -108,18 +114,27 @@ def generate_command(
     effective_model = selected_model or NanoBananaModel.PRO
     effective_style_id = selected_style_id or "default"
     try:
-        with console.status("[bold cyan]Generating slide...[/]", spinner="dots"):
-            resolved_style = resolve_style_context(style_id=effective_style_id)
-            merged_style = merge_style_references(resolved_style, selected_references)
-            engine = NanoBananaSlideEngine(
-                model=effective_model,
-                api_key=api_key,
+        resolved_style = resolve_style_context(style_id=effective_style_id)
+        merged_style = merge_style_references(resolved_style, selected_references)
+        engine = NanoBananaSlideEngine(
+            model=effective_model,
+            api_key=api_key,
+        )
+        results = []
+        for index in range(variations):
+            status_message = (
+                f"[bold cyan]Generating slide variation {index + 1}/{variations}...[/]"
+                if variations > 1
+                else "[bold cyan]Generating slide...[/]"
             )
-            result = engine.generate(
-                prompt=selected_prompt,
-                style=merged_style,
-                aspect_ratio=aspect_ratio,
-            )
+            with console.status(status_message, spinner="dots"):
+                results.append(
+                    engine.generate(
+                        prompt=selected_prompt,
+                        style=merged_style,
+                        aspect_ratio=aspect_ratio,
+                    )
+                )
     except ValueError as exc:
         console.print(f"[bold red]{exc}[/]")
         raise typer.Exit(code=1) from exc
@@ -127,11 +142,16 @@ def generate_command(
         console.print(f"[bold red]Generation failed: {exc}[/]")
         raise typer.Exit(code=1) from exc
 
-    persisted_path = persist_slide_result(result, output_dir=target_output_dir)
+    selected_index = _select_variation_index(
+        count=len(results),
+        no_interactive=no_interactive,
+    )
+    selected_result = results[selected_index]
+    persisted_path = persist_slide_result(selected_result, output_dir=target_output_dir)
     final_local_path, slide_id = _append_slide_to_project(
-        result.revised_prompt,
+        selected_result.revised_prompt,
         persisted_path,
-        result.metadata,
+        selected_result.metadata,
     )
     saved_path = final_local_path or persisted_path
     style_label = merged_style.style_id or "project/default"
@@ -143,6 +163,7 @@ def generate_command(
             f"Model: [bold]{effective_model.value}[/]\n"
             f"Style: [bold]{style_label}[/]\n"
             f"References: [bold]{references_count}[/]\n"
+            f"Variation: [bold]{selected_index + 1}/{len(results)}[/]\n"
             f"Saved to [bold]{saved_path}[/]",
             title="nanoslides",
             border_style="green",
@@ -228,6 +249,25 @@ def _resolve_config(ctx: typer.Context) -> GlobalConfig:
     if ctx.obj and isinstance(ctx.obj.get("config"), GlobalConfig):
         return ctx.obj["config"]
     return load_global_config()
+
+
+def _select_variation_index(*, count: int, no_interactive: bool) -> int:
+    if count <= 1:
+        return 0
+    if no_interactive or not sys.stdin.isatty():
+        console.print(
+            "[yellow]Generated multiple variations in non-interactive mode; "
+            "saving variation 1.[/]"
+        )
+        return 0
+
+    choices = [str(index) for index in range(1, count + 1)]
+    selected = Prompt.ask(
+        "Select variation to save",
+        choices=choices,
+        default="1",
+    )
+    return int(selected) - 1
 
 
 def _append_slide_to_project(
