@@ -18,6 +18,7 @@ from nanoslides.cli.reference_files import (
     resolve_reference_files,
 )
 from nanoslides.core.config import GlobalConfig, get_gemini_api_key, load_global_config
+from nanoslides.core.interfaces import SlideResult
 from nanoslides.core.presentation import Presentation
 from nanoslides.core.project import (
     PROJECT_STATE_FILE,
@@ -161,6 +162,11 @@ def generate_command(
         console.print(f"[bold red]Generation failed: {exc}[/]")
         raise typer.Exit(code=1) from exc
 
+    preview_paths: list[Path] = []
+    if len(results) > 1:
+        preview_paths = _persist_variation_previews(results, preview_dir=Path("previews"))
+        _render_variation_previews(preview_paths)
+
     selected_index = _select_variation_index(
         count=len(results),
         no_interactive=no_interactive,
@@ -287,11 +293,44 @@ def _select_variation_index(*, count: int, no_interactive: bool) -> int:
 
     choices = [str(index) for index in range(1, count + 1)]
     selected = Prompt.ask(
-        "Select variation to save",
+        "After reviewing previews, select variation to save",
         choices=choices,
         default="1",
     )
     return int(selected) - 1
+
+
+def _persist_variation_previews(results: list[SlideResult], *, preview_dir: Path) -> list[Path]:
+    preview_paths: list[Path] = []
+    for index, result in enumerate(results, start=1):
+        preview_paths.append(
+            persist_slide_result(
+                result,
+                output_dir=preview_dir,
+                file_prefix=f"variation-{index:02d}",
+            )
+        )
+    return preview_paths
+
+
+def _render_variation_previews(preview_paths: list[Path]) -> None:
+    if not preview_paths:
+        return
+    preview_dir = preview_paths[0].parent.resolve()
+    table = Table(title="Generated variation previews", show_header=True, header_style="bold")
+    table.add_column("Variation", justify="right")
+    table.add_column("Preview path")
+    for index, path in enumerate(preview_paths, start=1):
+        table.add_row(str(index), str(path.resolve()))
+    console.print(table)
+    console.print(
+        Panel.fit(
+            f"[bold yellow]Previews saved to[/] [bold]{preview_dir}[/]\n"
+            "Open the preview files, compare variations, then choose which one to persist.",
+            title="nanoslides",
+            border_style="yellow",
+        )
+    )
 
 
 def _append_slide_to_project(
