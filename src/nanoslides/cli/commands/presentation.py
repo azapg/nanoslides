@@ -34,7 +34,6 @@ from nanoslides.core.project import (
 )
 from nanoslides.core.style import (
     ResolvedStyle,
-    load_project_style,
     merge_style_references,
     resolve_style_context,
 )
@@ -48,18 +47,17 @@ from pydantic import BaseModel, Field
 console = Console()
 _PLANNER_PRIMARY_MODEL = "gemini-3-pro-preview"
 _PLANNER_FALLBACK_MODEL = "gemini-2.5-pro"
+_PLANNER_TIMEOUT_MS = 120_000.0
 
 
-class DetailLevel(str, Enum):
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
+class DeckDetailMode(str, Enum):
+    DETAILED = "detailed"
+    PRESENTER = "presenter"
 
 
-class IllustrationLevel(str, Enum):
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
+class DeckLength(str, Enum):
+    SHORT = "short"
+    DEFAULT = "default"
 
 
 class PlannedSlide(BaseModel):
@@ -82,13 +80,9 @@ class PresentationPlan(BaseModel):
 @dataclass(frozen=True)
 class PresentationRequest:
     prompt: str
-    audience: str | None
-    use_case: str | None
-    duration_minutes: int | None
-    slide_count: int | None
-    detail_level: str
-    illustration_level: str
+    detail_mode: str
     language: str
+    length: str
     style_id: str | None
     references: list[Path]
     reference_files: list[Path]
@@ -98,7 +92,7 @@ def presentation_command(
     ctx: typer.Context,
     prompt: str | None = typer.Argument(
         None,
-        help="Single prompt describing the full presentation objective.",
+        help="Single description of the full deck objective.",
     ),
     style_id: str | None = typer.Option(
         None,
@@ -141,40 +135,17 @@ def presentation_command(
         case_sensitive=False,
         help="Deck slide image aspect ratio.",
     ),
-    audience: str | None = typer.Option(
-        None,
-        "--audience",
-        help="Intended audience (e.g., executives, students, engineers).",
-    ),
-    use_case: str | None = typer.Option(
-        None,
-        "--use-case",
-        help="Where/how this deck will be used (pitch, class, demo, etc.).",
-    ),
-    duration_minutes: int | None = typer.Option(
-        None,
-        "--duration-minutes",
-        min=1,
-        help="Estimated presentation length in minutes.",
-    ),
-    slide_count: int | None = typer.Option(
-        None,
-        "--slide-count",
-        min=1,
-        max=40,
-        help="Target number of slides.",
-    ),
-    detail_level: DetailLevel = typer.Option(
-        DetailLevel.MEDIUM,
-        "--detail-level",
+    detail_mode: DeckDetailMode = typer.Option(
+        DeckDetailMode.PRESENTER,
+        "--detail-mode",
         case_sensitive=False,
-        help="How technical/detailed slide content should be: low, medium, high.",
+        help="Deck style: detailed or presenter.",
     ),
-    illustration_level: IllustrationLevel = typer.Option(
-        IllustrationLevel.MEDIUM,
-        "--illustration-level",
+    length: DeckLength = typer.Option(
+        DeckLength.DEFAULT,
+        "--length",
         case_sensitive=False,
-        help="How illustration-heavy deck visuals should be: low, medium, high.",
+        help="Deck length: short or default.",
     ),
     language: str = typer.Option(
         "en",
@@ -187,17 +158,13 @@ def presentation_command(
         help="Disable guided prompts and use only provided arguments/options.",
     ),
 ) -> None:
-    """Generate an entire presentation deck from one high-level prompt."""
+    """Generate an entire deck from one high-level prompt."""
     try:
         request = PresentationRequest(
             prompt=prompt or "",
-            audience=audience,
-            use_case=use_case,
-            duration_minutes=duration_minutes,
-            slide_count=slide_count,
-            detail_level=detail_level.value,
-            illustration_level=illustration_level.value,
+            detail_mode=detail_mode.value,
             language=language.strip() or "en",
+            length=length.value,
             style_id=style_id,
             references=list(references or []),
             reference_files=resolve_reference_files(reference_file),
@@ -205,10 +172,8 @@ def presentation_command(
         if not no_interactive and sys.stdin.isatty() and not request.prompt:
             request = _collect_interactive_inputs(request)
         if not request.prompt.strip():
-            console.print("[bold red]Presentation prompt is required.[/]")
+            console.print("[bold red]Deck description is required.[/]")
             raise typer.Exit(code=1)
-        _validate_level("detail-level", request.detail_level)
-        _validate_level("illustration-level", request.illustration_level)
     except ValueError as exc:
         console.print(f"[bold red]{exc}[/]")
         raise typer.Exit(code=1) from exc
@@ -226,7 +191,7 @@ def presentation_command(
     merged_style = merge_style_references(resolved_style, request.references)
 
     try:
-        with console.status("[bold cyan]Planning presentation with Gemini 3 Pro...[/]"):
+        with console.status("[bold cyan]Planning deck with Gemini 3 Pro...[/]"):
             plan, planner_model = _plan_presentation(
                 api_key=api_key,
                 request=request,
@@ -234,7 +199,7 @@ def presentation_command(
                 has_existing_style=has_existing_style,
             )
     except RuntimeError as exc:
-        console.print(f"[bold red]Presentation planning failed: {exc}[/]")
+        console.print(f"[bold red]Deck planning failed: {exc}[/]")
         raise typer.Exit(code=1) from exc
 
     effective_style = _apply_inferred_style_if_needed(
@@ -255,7 +220,7 @@ def presentation_command(
             reference_files=request.reference_files,
         )
     except (ValueError, RuntimeError) as exc:
-        console.print(f"[bold red]Presentation generation failed: {exc}[/]")
+        console.print(f"[bold red]Deck generation failed: {exc}[/]")
         raise typer.Exit(code=1) from exc
 
     summary = Table(title="Generated deck")
@@ -275,7 +240,7 @@ def presentation_command(
     console.print(summary)
     console.print(
         Panel.fit(
-            f"[bold green]Presentation generated[/]\n"
+            f"[bold green]Deck generated[/]\n"
             f"Slides: [bold]{len(generated_rows)}[/]\n"
             f"Planner: [bold]{planner_model}[/]\n"
             f"Generator model: [bold]{effective_model.value}[/]\n"
@@ -290,113 +255,33 @@ def presentation_command(
 def _collect_interactive_inputs(request: PresentationRequest) -> PresentationRequest:
     console.print(
         Panel.fit(
-            "[bold cyan]Guided presentation creation[/]\nWe'll define the full deck step by step.",
+            "[bold cyan]Guided deck creation[/]\nWe'll define the full deck with simple inputs.",
             title="nanoslides",
             border_style="cyan",
         )
     )
-    prompt = Prompt.ask("1) Presentation prompt")
-    audience = _prompt_optional("2) Target audience (optional)", request.audience)
-    use_case = _prompt_optional("3) Use case (optional)", request.use_case)
-    duration_minutes = _prompt_optional_int(
-        "4) Duration in minutes (optional)",
-        request.duration_minutes,
-        minimum=1,
+    detail_mode = Prompt.ask(
+        "1) Deck mode",
+        choices=[mode.value for mode in DeckDetailMode],
+        default=request.detail_mode,
     )
-    slide_count = _prompt_optional_int(
-        "5) Target slide count (optional)",
-        request.slide_count,
-        minimum=1,
+    language = Prompt.ask("2) Language", default=request.language).strip() or "en"
+    length = Prompt.ask(
+        "3) Deck length",
+        choices=[item.value for item in DeckLength],
+        default=request.length,
     )
-    detail_level = Prompt.ask(
-        "6) Detail level",
-        choices=[level.value for level in DetailLevel],
-        default=request.detail_level,
-    )
-    illustration_level = Prompt.ask(
-        "7) Illustration level",
-        choices=[level.value for level in IllustrationLevel],
-        default=request.illustration_level,
-    )
-    language = Prompt.ask("8) Language", default=request.language).strip() or "en"
-
-    project_style = load_project_style()
-    default_style = request.style_id
-    if default_style is None and project_style is not None:
-        default_style = project_style.style_id or ""
-    style_id = _prompt_optional("9) Style ID (optional)", default_style)
-
-    refs_default = ", ".join(str(path) for path in request.references)
-    raw_refs = Prompt.ask(
-        "10) Reference image paths (optional, comma-separated)",
-        default=refs_default,
-    ).strip()
-    references = _parse_reference_paths(raw_refs, item_label="Reference image")
-    raw_reference_files = Prompt.ask(
-        "11) Reference text file paths (optional, comma-separated)",
-        default=", ".join(str(path) for path in request.reference_files),
-    ).strip()
-    reference_files = _parse_reference_paths(
-        raw_reference_files,
-        item_label="Reference file",
-    )
+    prompt = Prompt.ask("4) Deck description", default=request.prompt).strip()
 
     return PresentationRequest(
-        prompt=prompt.strip(),
-        audience=audience,
-        use_case=use_case,
-        duration_minutes=duration_minutes,
-        slide_count=slide_count,
-        detail_level=detail_level,
-        illustration_level=illustration_level,
+        prompt=prompt,
+        detail_mode=detail_mode,
         language=language,
-        style_id=style_id,
-        references=references,
-        reference_files=resolve_reference_files(reference_files),
+        length=length,
+        style_id=request.style_id,
+        references=request.references,
+        reference_files=resolve_reference_files(request.reference_files),
     )
-
-
-def _prompt_optional(label: str, default: str | None) -> str | None:
-    value = Prompt.ask(label, default=default or "").strip()
-    return value or None
-
-
-def _prompt_optional_int(label: str, default: int | None, *, minimum: int) -> int | None:
-    while True:
-        value = Prompt.ask(label, default=str(default) if default is not None else "").strip()
-        if not value:
-            return None
-        try:
-            parsed = int(value)
-        except ValueError:
-            console.print("[bold red]Enter a valid integer value.[/]")
-            continue
-        if parsed < minimum:
-            console.print(f"[bold red]Value must be at least {minimum}.[/]")
-            continue
-        return parsed
-
-
-def _parse_reference_paths(raw_paths: str, *, item_label: str) -> list[Path]:
-    if not raw_paths.strip():
-        return []
-    references: list[Path] = []
-    seen: set[str] = set()
-    for token in raw_paths.split(","):
-        path = Path(token.strip()).expanduser().resolve()
-        if not path.exists() or not path.is_file():
-            raise ValueError(f"{item_label} not found: {path}")
-        normalized = str(path)
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        references.append(path)
-    return references
-
-
-def _validate_level(name: str, value: str) -> None:
-    if value not in {level.value for level in DetailLevel}:
-        raise ValueError(f"{name} must be one of: low, medium, high.")
 
 
 def _plan_presentation(
@@ -410,7 +295,7 @@ def _plan_presentation(
         api_key=api_key,
         http_options=types.HttpOptions(
             api_version="v1alpha",
-            timeout=120.0,
+            timeout=_PLANNER_TIMEOUT_MS,
             retry_options=types.HttpRetryOptions(attempts=2),
         ),
     )
@@ -453,10 +338,6 @@ def _plan_presentation(
         raise RuntimeError("Presentation planner failed before receiving a response.")
     payload = _parse_json_response(response)
     plan = PresentationPlan.model_validate(payload)
-    if request.slide_count is not None and len(plan.slides) != request.slide_count:
-        raise RuntimeError(
-            f"Planner returned {len(plan.slides)} slides but slide-count={request.slide_count}."
-        )
     return plan, planner_model_used
 
 
@@ -466,6 +347,18 @@ def _build_planner_prompt(
     style: ResolvedStyle,
     has_existing_style: bool,
 ) -> str:
+    detail_mode_guidance = {
+        DeckDetailMode.DETAILED.value: (
+            "A comprehensive deck with full text and details, suitable for emailing or reading alone."
+        ),
+        DeckDetailMode.PRESENTER.value: (
+            "Clean, visual slides with key talking points to support a live presenter."
+        ),
+    }[request.detail_mode]
+    length_guidance = {
+        DeckLength.SHORT.value: "Keep the deck concise with about 4-6 slides.",
+        DeckLength.DEFAULT.value: "Use however many slides are needed for good coverage.",
+    }[request.length]
     style_context = "none"
     if has_existing_style:
         style_context = (
@@ -481,13 +374,11 @@ def _build_planner_prompt(
         "For each planned slide, produce a strong standalone image prompt suitable for "
         "a single `nanoslides generate` call.\n"
         f"Deck prompt: {request.prompt}\n"
-        f"Audience: {request.audience or 'general'}\n"
-        f"Use case: {request.use_case or 'general presentation'}\n"
-        f"Duration minutes: {request.duration_minutes or 'not specified'}\n"
-        f"Requested slide count: {request.slide_count or 'choose sensible count'}\n"
-        f"Detail level: {request.detail_level}\n"
-        f"Illustration level: {request.illustration_level}\n"
+        f"Detail mode: {request.detail_mode}\n"
+        f"Detail mode guidance: {detail_mode_guidance}\n"
         f"Language: {request.language}\n"
+        f"Length: {request.length}\n"
+        f"Length guidance: {length_guidance}\n"
         f"Reference files count: {len(request.reference_files)}\n"
         f"Existing style context:\n{style_context}\n"
         "Rules:\n"
@@ -497,7 +388,7 @@ def _build_planner_prompt(
         "inferred_style_base_prompt and inferred_style_negative_prompt empty strings.\n"
         "4) If no style context is present, infer a reusable style by filling "
         "inferred_style_base_prompt and optionally inferred_style_negative_prompt.\n"
-        "5) If requested slide count is specified, return exactly that many slides.\n"
+        "5) Respect the requested length guidance.\n"
     )
 
 
@@ -591,8 +482,9 @@ def _print_plan_summary(
     style_label = style.style_id or "inferred/default"
     console.print(
         Panel.fit(
-            f"Audience: [bold]{request.audience or 'general'}[/]\n"
-            f"Use case: [bold]{request.use_case or 'general'}[/]\n"
+            f"Mode: [bold]{request.detail_mode}[/]\n"
+            f"Length: [bold]{request.length}[/]\n"
+            f"Language: [bold]{request.language}[/]\n"
             f"Style: [bold]{style_label}[/]\n"
             f"Summary: {plan.planning_summary or '(none)'}",
             title="Plan summary",

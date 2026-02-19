@@ -69,7 +69,7 @@ app.command("generate", context_settings={"allow_extra_args": True})(generate_co
 app.command("edit")(edit_command)
 app.command("remove")(remove_command)
 app.command("move")(move_command)
-app.command("presentation")(presentation_command)
+app.command("deck")(presentation_command)
 app.command("export")(export_command)
 app.add_typer(style_app, name="styles")
 
