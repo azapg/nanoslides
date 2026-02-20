@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from nanoslides.cli.commands.clearall import clearall_command
 from nanoslides.cli.commands.edit import edit_command
 from nanoslides.cli.commands.export import export_command
 from nanoslides.cli.commands.generate import generate_command
@@ -68,6 +69,7 @@ app.command("setup")(setup_command)
 app.command("generate", context_settings={"allow_extra_args": True})(generate_command)
 app.command("edit")(edit_command)
 app.command("remove")(remove_command)
+app.command("clearall")(clearall_command)
 app.command("move")(move_command)
 app.command("deck")(presentation_command)
 app.command("export")(export_command)
