@@ -9,7 +9,7 @@ Unlike tools that prioritize one-off generations, `nanoslides` is built to be us
 - **Library First**: Designed to be integrated into web apps, automated agents, and custom scripts.
 - **Stateless Generation**: The core engines can generate multiple variations without forcing side effects on your project state.
 - **Consistent Styling**: Define global or project-specific styles (base prompts, negative prompts, and reference images) to ensure every slide feels part of the same deck.
-- **CLI for Humans & Agents**: A powerful interface for quick iterations and for AI agents that need to execute slide generation commands.
+- **CLI for Humans & Agents**: A powerful interface for quick iterations and for AI agents like OpenClaw-based bots.
 
 ## Installation
 
@@ -74,6 +74,7 @@ nanoslides generate "Introduction to AI in healthcare"
 - `nanoslides styles steal ./image.png`: Automatically infer style parameters from an existing image using Gemini Vision.
 - `nanoslides styles generate "clean Swiss-style layouts with muted blue accents" --reference-image ./brand.png`: Preview a generated style, then choose whether to save it to project `style.json` or globally.
 - `nanoslides edit <slide-id> "Make the colors warmer"`: Iterate on a specific slide while maintaining its context.
+- `nanoslides clearall`: Preview every slide in the current project, then confirm before deleting them all.
 - `nanoslides deck "Launch plan for Product X" --detail-mode presenter --length short`: Plan and generate a full deck from one prompt with Gemini 3 Pro orchestration.
 - `nanoslides export --format pptx`: Compile your generated images into a PowerPoint file.
 

@@ -41,10 +41,12 @@
 - `prompt` (string, required): latest prompt or edit instruction recorded for this slide.
 - `image_path` (string or null, optional): generated image path for the slide.
 - `metadata` (object, required): engine/provider metadata stored as key/value pairs.
-- `is_draft` (boolean, required): whether this entry is a draft pending review.
-- `draft_of` (string or null, optional): source slide ID for drafts (`null` for non-draft slides).
+- `is_draft` (boolean, required): whether this entry is a draft pending review (primarily used by the CLI).
+- `draft_of` (string or null, optional): source slide ID for drafts (`null` for non-draft slides). Used by the CLI to track iterations.
 
-## Edit review draft flow
+## Edit review draft flow (CLI implementation)
+
+> **Note**: This flow is specific to the `nanoslides` CLI. Programmatic users of the library are encouraged to handle slide variations and approvals in their own application logic before committing them to the project state.
 
 - `nanoslides edit` now saves edits as draft slide entries when the target maps to a project slide.
 - The CLI marks the output as `Needs review before applying` and prompts whether to save/apply it now (default is `yes`).
